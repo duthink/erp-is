@@ -1051,13 +1051,13 @@ docker compose -f production/production.yaml exec backend \
 
 | Branch | Purpose | Deploy target |
 |--------|---------|---------------|
-| `main` | Production truth. Tracks only tested commits paired with container/image tags referenced in `production.env`. | Production |
-| `staging` | Release candidate. Used to exercise upstream merges and new custom-app tags against a staging bench. | Staging bench (optional) |
-| `dev` | Scratch/feature work. Safe spot to prototype new overrides, scripts, or Containerfile tweaks. | Local only |
+| [`main`](https://github.com/duthink/erp-is/tree/main) | Production truth. Tracks only tested commits paired with container/image tags referenced in `production.env`. | Production |
+| [`staging`](https://github.com/duthink/erp-is/tree/staging) | Release candidate. Used to exercise upstream merges and new custom-app tags against a staging bench. | Staging server |
+| [`dev`](https://github.com/duthink/erp-is/tree/dev) | Scratch/feature work. Safe spot to prototype new overrides, scripts, or Containerfile tweaks. | Local only |
 
 **Remotes:**
 
-- `origin` → this fork (`erp-is`).
+- `origin` → [duthink/erp-is](https://github.com/duthink/erp-is).
 - `upstream` → `https://github.com/frappe/frappe_docker.git`.
 
 ### Sync loop (weekly)
