@@ -9,6 +9,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
+cd "$PROJECT_DIR" || exit 1
+
+# Load environment to get project name
+source production.env 2>/dev/null || true
+PROJECT_NAME="${ROUTER:-erpnext-production}"
+
 # Default retention policies
 DEFAULT_COMMUNICATION_RETENTION=180
 DEFAULT_VERSION_RETENTION=90
@@ -94,7 +100,7 @@ validate_site() {
     log_info "Validating site: $site"
 
     # Run docker command and capture result
-    docker compose -f "$PROJECT_DIR/production.yaml" -p erpnext-production exec -T backend \
+    docker compose -f "$PROJECT_DIR/production.yaml" -p "$PROJECT_NAME" exec -T backend \
       bench --site "$site" mariadb -e "SELECT 1;" >/dev/null 2>&1
     result=$?
 
@@ -106,7 +112,7 @@ validate_site() {
         log_error "Available sites:"
         # List sites safely
         local sites_output
-        sites_output=$(docker compose -f "$PROJECT_DIR/production.yaml" -p erpnext-production exec -T backend \
+        sites_output=$(docker compose -f "$PROJECT_DIR/production.yaml" -p "$PROJECT_NAME" exec -T backend \
           ls sites/ 2>/dev/null | grep -v -E '\.(json|txt)$' | sed 's/^/  - /' 2>/dev/null || echo "  - Unable to list sites")
         echo "$sites_output" >&2
         return 1
@@ -116,7 +122,7 @@ validate_site() {
 # Function to get database size
 get_db_size() {
     local size
-    size=$(docker compose -f "$PROJECT_DIR/production.yaml" -p erpnext-production exec -T backend \
+    size=$(docker compose -f "$PROJECT_DIR/production.yaml" -p "$PROJECT_NAME" exec -T backend \
       bench --site "$SITE" mariadb -N -e "
       SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2)
       FROM information_schema.tables
@@ -130,7 +136,7 @@ count_records_to_delete() {
     local table_query="$2"
     local retention_days="$3"
 
-    docker compose -f "$PROJECT_DIR/production.yaml" -p erpnext-production exec -T backend \
+    docker compose -f "$PROJECT_DIR/production.yaml" -p "$PROJECT_NAME" exec -T backend \
       bench --site "$SITE" mariadb -N -e "
       SET SQL_SAFE_UPDATES = 0;
       SELECT COUNT(*) FROM $table_query
@@ -140,7 +146,7 @@ count_records_to_delete() {
 # Function to perform cleanup
 perform_cleanup() {
     log_info "Running cleanup operations..."
-    docker compose -f "$PROJECT_DIR/production.yaml" -p erpnext-production exec -T backend \
+    docker compose -f "$PROJECT_DIR/production.yaml" -p "$PROJECT_NAME" exec -T backend \
       bench --site "$SITE" mariadb <<EOF
 SET SQL_SAFE_UPDATES = 0;
 

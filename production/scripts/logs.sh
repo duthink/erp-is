@@ -11,7 +11,13 @@ echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Navigate to production directory
-cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRODUCTION_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PRODUCTION_DIR" || exit 1
+
+# Load environment to get project name
+source production.env 2>/dev/null || true
+PROJECT_NAME="${ROUTER:-erpnext-production}"
 
 FOLLOW_MODE="follow"
 TAIL_LINES=200
@@ -100,14 +106,15 @@ case "$INPUT" in
 esac
 
 # Check if services are running
-docker ps | grep -q "erpnext-production" || { echo_error "ERPNext is not running!"; exit 1; }
+docker compose -f production.yaml ps --status running 2>/dev/null | grep -q backend || { echo_error "ERPNext is not running!"; exit 1; }
 
 # Show logs
+echo_info "Project: $PROJECT_NAME"
 echo_info "Logs for: $SERVICE"
 [ "$SERVICE" = "all" ] && SERVICE=""
 if [[ "$FOLLOW_MODE" == "follow" ]]; then
   echo_info "Streaming (Ctrl+C to exit)"
-  docker compose --project-name erpnext-production -f production.yaml logs -f $SERVICE
+  docker compose -f production.yaml logs -f $SERVICE
 else
-  docker compose --project-name erpnext-production -f production.yaml logs --tail "$TAIL_LINES" $SERVICE
+  docker compose -f production.yaml logs --tail "$TAIL_LINES" $SERVICE
 fi
