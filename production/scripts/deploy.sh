@@ -20,6 +20,11 @@ PROJECT_ROOT="$(dirname "$PRODUCTION_DIR")"
 
 cd "$PRODUCTION_DIR"
 
+# Load environment to get project name
+source production.env 2>/dev/null || true
+# Default project name based on ROUTER, fallback to erpnext-production
+COMPOSE_PROJECT_NAME="${ROUTER:-erpnext-production}"
+
 # Parse arguments
 case "${1:-}" in
     --help|-h)
@@ -29,18 +34,21 @@ Usage: $0 [OPTIONS]
 Options:
   --setup       Setup environment files from templates
   --regenerate  Only regenerate production.yaml (don't deploy)
+  --skip-infra  Skip Traefik and MariaDB deployment (for staging on same server)
   --help, -h    Show this help
 
 Examples:
-  $0              # Normal deployment
+  $0              # Normal deployment (deploys Traefik, MariaDB, ERPNext)
   $0 --setup      # Create env files first
+  $0 --skip-infra # Deploy only ERPNext (staging on same server as production)
   $0 --regenerate # Regenerate production.yaml only
 EOF
         exit 0
         ;;
     --setup) MODE="setup" ;;
     --regenerate) MODE="regenerate" ;;
-    "") MODE="deploy" ;;
+    --skip-infra) MODE="deploy"; SKIP_INFRA=true ;;
+    "") MODE="deploy"; SKIP_INFRA=false ;;
     *) echo_error "Unknown: $1 (use --help)"; exit 1 ;;
 esac
 
@@ -74,6 +82,7 @@ command -v docker &> /dev/null || { echo_error "Docker not installed"; exit 1; }
 docker compose version &> /dev/null || { echo_error "Docker Compose V2 not installed"; exit 1; }
 
 echo_info "ERPNext Production Deployment"
+echo_info "Project Name: $COMPOSE_PROJECT_NAME"
 
 # Check env files exist
 for file in production.env traefik.env mariadb.env; do
@@ -101,7 +110,7 @@ fi
 generate_yaml() {
     [[ -f "production.yaml" ]] && cp production.yaml "production.yaml.backup.$(date +%Y%m%d_%H%M%S)"
     
-    docker compose --project-name erpnext-production \
+    docker compose --project-name "$COMPOSE_PROJECT_NAME" \
       --env-file production.env \
       -f "$PROJECT_ROOT/compose.yaml" \
       -f "$PROJECT_ROOT/overrides/compose.redis.yaml" \
@@ -120,28 +129,40 @@ fi
 
 # Deploy services
 echo ""
-echo_info "Step 1: Deploying Traefik..."
-docker compose --project-name traefik \
-  --env-file traefik.env \
-  -f "$PROJECT_ROOT/overrides/compose.traefik.yaml" \
-  -f "$PROJECT_ROOT/overrides/compose.traefik-ssl.yaml" \
-  up -d
-echo_info "✓ Traefik deployed"
 
-echo_info "Step 2: Deploying MariaDB..."
-docker compose --project-name mariadb \
-  --env-file mariadb.env \
-  -f "$PROJECT_ROOT/overrides/compose.mariadb-shared.yaml" \
-  up -d
-echo_info "✓ MariaDB deployed. Waiting 30s for initialization..."
-sleep 30
+# Track step number
+STEP=1
 
-echo_info "Step 3: Generating production.yaml..."
+if [[ "$SKIP_INFRA" == "true" ]]; then
+    echo_info "Skipping Traefik and MariaDB (--skip-infra mode)"
+    echo_info "Assuming infrastructure is already running from production."
+else
+    echo_info "Step $STEP: Deploying Traefik..."
+    docker compose --project-name traefik \
+      --env-file traefik.env \
+      -f "$PROJECT_ROOT/overrides/compose.traefik.yaml" \
+      -f "$PROJECT_ROOT/overrides/compose.traefik-ssl.yaml" \
+      up -d
+    echo_info "✓ Traefik deployed"
+    ((STEP++))
+
+    echo_info "Step $STEP: Deploying MariaDB..."
+    docker compose --project-name mariadb \
+      --env-file mariadb.env \
+      -f "$PROJECT_ROOT/overrides/compose.mariadb-shared.yaml" \
+      up -d
+    echo_info "✓ MariaDB deployed. Waiting 30s for initialization..."
+    sleep 30
+    ((STEP++))
+fi
+
+echo_info "Step $STEP: Generating production.yaml..."
 generate_yaml
 echo_info "✓ Generated"
+((STEP++))
 
-echo_info "Step 4: Deploying ERPNext..."
-docker compose --project-name erpnext-production -f production.yaml up -d
+echo_info "Step $STEP: Deploying ERPNext..."
+docker compose --project-name "$COMPOSE_PROJECT_NAME" -f production.yaml up -d
 echo_info "✓ ERPNext deployed"
 
 # Success message
