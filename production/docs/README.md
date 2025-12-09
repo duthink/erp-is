@@ -193,7 +193,22 @@ sudo usermod -aG docker $USER
 docker ps
 ```
 
-### ✅ 5. Validate Environment
+### ✅ 5. Clone Repository
+
+```bash
+# Create deployment directory
+sudo mkdir -p /srv/erp
+sudo chown $USER:$USER /srv/erp
+cd /srv/erp
+
+# Clone the main branch for production
+git clone -b main https://github.com/duthink/erp-is.git production
+
+# Navigate to production directory
+cd production/production
+```
+
+### ✅ 6. Validate Environment
 
 ```bash
 # Run validation script (checks all config files)
