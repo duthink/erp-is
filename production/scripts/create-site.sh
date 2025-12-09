@@ -14,9 +14,13 @@ echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Navigate to production directory
-cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRODUCTION_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PRODUCTION_DIR" || exit 1
 
-PROJECT_NAME="erpnext-production"
+# Load environment to get project name (same as deploy.sh)
+source production.env 2>/dev/null || true
+PROJECT_NAME="${ROUTER:-erpnext-production}"
 
 # Get site name
 if [[ -z "$1" ]]; then
@@ -64,15 +68,29 @@ fi
 DB_ROOT_PASSWORD=$(grep "^DB_PASSWORD=" mariadb.env | cut -d'=' -f2)
 [[ -z "$DB_ROOT_PASSWORD" ]] && { echo_error "DB_PASSWORD not found in mariadb.env"; exit 1; }
 
-# Check if backend is running
-docker ps | grep -q "$PROJECT_NAME-backend" || {
+# Check if production.yaml exists
+[[ ! -f "production.yaml" ]] && { echo_error "production.yaml not found! Run: ./scripts/deploy.sh"; exit 1; }
+
+# Check if backend is running (use docker compose to find the right container)
+if ! docker compose -f production.yaml ps --status running 2>/dev/null | grep -q backend; then
     echo_error "Backend not running! Run: ./scripts/deploy.sh"
     exit 1
-}
+fi
+
+echo_info "Project: $PROJECT_NAME"
+echo_info "Creating site: $SITE_NAME"
+
+# Check if site folder already exists in this bench's volume
+SITE_EXISTS=$(docker compose -f production.yaml exec -T backend test -d "sites/$SITE_NAME" && echo "yes" || echo "no")
+if [[ "$SITE_EXISTS" == "yes" ]]; then
+    echo_error "Site folder 'sites/$SITE_NAME' already exists in this bench!"
+    echo_info "To recreate, first drop the site:"
+    echo_info "  docker compose -f production.yaml exec backend bench drop-site $SITE_NAME --force"
+    exit 1
+fi
 
 # Create the site
-echo_info "Creating site: $SITE_NAME"
-docker compose --project-name "$PROJECT_NAME" exec backend \
+docker compose -f production.yaml exec backend \
   bench new-site \
     --mariadb-user-host-login-scope='%' \
     --db-root-password "$DB_ROOT_PASSWORD" \
@@ -88,9 +106,9 @@ echo_info "Username: Administrator"
 echo_info "Password: $ADMIN_PASSWORD"
 echo ""
 echo_warn "Next steps:"
-echo_warn "1. Point DNS $SITE_NAME to your server IP"
-echo_warn "2. Update SITES in production.env"
+echo_warn "1. Ensure DNS for $SITE_NAME points to your server IP"
+echo_warn "2. Ensure SITES in production.env includes this domain"
 echo_warn "3. Change admin password after login"
 echo_warn "4. Wait for SSL certificate (few minutes)"
 echo ""
-echo_info "Set as default: docker compose -p $PROJECT_NAME exec backend bench use $SITE_NAME"
+echo_info "Set as default: docker compose -f production.yaml exec backend bench use $SITE_NAME"

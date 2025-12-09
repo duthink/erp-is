@@ -13,9 +13,15 @@ echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
 # Navigate to production directory
-cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRODUCTION_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PRODUCTION_DIR" || exit 1
 
-PROJECT_ROOT="$(dirname "$(pwd)")"
+PROJECT_ROOT="$(dirname "$PRODUCTION_DIR")"
+
+# Load environment to get project name
+source production.env 2>/dev/null || true
+PROJECT_NAME="${ROUTER:-erpnext-production}"
 
 # Check for help first
 if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
@@ -48,10 +54,11 @@ stop_service() {
     fi
 }
 
+echo_info "Project: $PROJECT_NAME"
 echo_info "Stopping ERPNext services..."
 
 # Stop ERPNext
-stop_service "erpnext-production" "erpnext-production" -f production.yaml
+stop_service "$PROJECT_NAME" "$PROJECT_NAME" -f production.yaml
 
 # Ask about stopping dependencies
 STOP_ALL="${1:-}"

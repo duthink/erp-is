@@ -24,8 +24,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Configuration
-PROJECT_NAME="${PROJECT_NAME:-erpnext-production}"
+# Directories
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRODUCTION_DIR="$(dirname "$SCRIPT_DIR")"
+
+cd "$PRODUCTION_DIR"
+
+# Load environment to get project name (ROUTER)
+source production.env 2>/dev/null || true
+
+# Configuration (can be overridden by env vars)
+PROJECT_NAME="${PROJECT_NAME:-${ROUTER:-erpnext-production}}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
 HOST_BACKUP_ROOT="${HOST_BACKUP_ROOT:-./backups}"
 HOST_BACKUP_LAYOUT="${HOST_BACKUP_LAYOUT:-flat}"
@@ -35,11 +44,7 @@ CLEANUP_POLICY="${CLEANUP_POLICY:-}"
 HOST_ONLY="${HOST_ONLY:-0}"
 COMPOSE_FILE="${COMPOSE_FILE:-production.yaml}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PRODUCTION_DIR="$(dirname "$SCRIPT_DIR")"
 COMPOSE_PATH="$PRODUCTION_DIR/$COMPOSE_FILE"
-
-cd "$PRODUCTION_DIR"
 
 [[ -f "$COMPOSE_PATH" ]] || { echo_error "Compose file '$COMPOSE_PATH' not found"; exit 1; }
 
