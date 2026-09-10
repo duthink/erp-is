@@ -42,3 +42,6 @@ production/traefik.env.*
 production/docs/operations-runbook.md
 production/docs/erpnext-v16-upgrade-plan.md
 production/docs/pre-update-safety-checklist.md
+# VitePress
+**/.vitepress/dist
+**/.vitepress/cache
