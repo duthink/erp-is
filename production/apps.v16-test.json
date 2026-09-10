@@ -4,6 +4,10 @@
     "branch": "v16.34.2"
   },
   {
+    "url": "https://github.com/frappe/hrms",
+    "branch": "v16.18.1"
+  },
+  {
     "url": "https://github.com/resilient-tech/india-compliance",
     "branch": "v16.9.0"
   }
