@@ -1,1052 +1,876 @@
-# Building Custom ERPNext Images for Production
+# Building Custom ERPNext Images
 
-**Production-Grade Workflow for Third-Party and Custom Apps**
+**Production workflow for ERPNext, HRMS, India Compliance, and other Frappe apps**
 
-This guide covers the **Pattern 2 (Gold Standard)** approach: building immutable Docker images with custom apps and pre-compiled assets. This is the recommended method for production deployments.
+This document defines the repository's standard workflow for building and promoting custom ERPNext Docker images.
 
----
+The image is built from `images/layered/Containerfile` and contains the Frappe Framework plus the applications declared in an `apps.json` manifest. Application assets are built into the image so application containers use the same immutable artifact.
 
-## Table of Contents
+## 1. Architecture
 
-1. [Overview](#overview)
-2. [Prerequisites](#prerequisites)
-3. [Quick Start](#quick-start)
-4. [Step-by-Step Guide](#step-by-step-guide)
-5. [Real-World Example: India Compliance](#real-world-example-india-compliance)
-6. [Adding Custom Apps](#adding-custom-apps)
-7. [Updating Apps](#updating-apps)
-8. [Uninstall Apps](#uninstall-apps)
-9. [Deployment Workflow](#deployment-workflow)
-10. [Troubleshooting](#troubleshooting)
-11. [Best Practices](#best-practices)
+The repository uses the **layered custom-image pattern**:
 
----
-
-## Overview
-
-### What This Achieves
-
-- ✅ **True Immutability**: Apps frozen at specific versions (tags/commits)
-- ✅ **Zero Runtime Builds**: No `bench build` needed in production
-- ✅ **No Asset Sync**: All containers have identical `/apps/` trees
-- ✅ **Fast Deployments**: Pull image → deploy → activate on sites
-- ✅ **Reliable Rollbacks**: Switch image tags instantly
-- ✅ **Audit Trail**: Image tag = exact code deployed
-
-### When to Use This Method
-
-- ✅ Production environments
-- ✅ Need reproducible deployments
-- ✅ Regulatory compliance required
-- ✅ Apps change weekly/monthly (not daily)
-- ✅ Want reliable rollbacks
-
-### Key Difference from Runtime Install (Pattern 3)
-
-| Aspect | Pattern 3 (Runtime) | Pattern 2 (This Guide) |
-|--------|---------------------|------------------------|
-| Apps installed | At runtime with `bench get-app` | Baked into image at build time |
-| Assets compiled | `bench build` in production | Pre-compiled during image build |
-| Asset sync | Manual `tar` pipeline required | Not needed - assets in image |
-| Immutability | Partial (apps can drift) | Complete (frozen versions) |
-| Rollback | Complex | Change image tag |
-
----
-
-## Prerequisites
-
-### Required Tools
-
-```bash
-# Verify Docker is installed
-docker --version  # Need 20.10+
-
-# Verify git is available
-git --version
-
-# Verify you have base64
-base64 --version
+```text
+production/apps.json
+        │
+        │ BuildKit secret
+        ▼
+images/layered/Containerfile
+        │
+        ├── frappe/build:version-16
+        │
+        ├── Frappe Framework
+        │
+        ├── ERPNext
+        ├── HRMS
+        └── other apps in apps.json
+        │
+        ▼
+ghcr.io/duthink/erpnext-custom:<immutable-tag>
+        │
+        ├── Staging / UAT
+        │
+        └── Production
 ```
 
-### GitHub Container Registry Access
+The layered Containerfile consumes the `apps.json` file through a BuildKit secret:
 
-1. Create Personal Access Token:
-   - Go to: https://github.com/settings/tokens/new
-   - Select scope: `write:packages`
-   - Generate token and save it securely
+```dockerfile
+RUN --mount=type=secret,id=apps_json,target=/opt/frappe/apps.json ...
+```
 
-2. Login to GitHub Container Registry:
-   ```bash
-   export GITHUB_TOKEN=your_token_here
-   echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_USERNAME --password-stdin
-   ```
+**Do not use `APPS_JSON_BASE64`.** The current build system intentionally uses a BuildKit secret instead.
 
-3. Verify login:
-   ```bash
-   docker pull ghcr.io/YOUR_USERNAME/test || echo "Ready to push"
-   ```
+## 2. Important repository rules
 
----
+### Build locally
 
-## Quick Start
+Image builds and Git operations are performed from the local development checkout.
 
-**5-minute walkthrough** for experienced users:
+```text
+LOCAL VS CODE
+     │
+     ├── edit code/manifests
+     ├── build image
+     ├── test image
+     └── commit changes
+             │
+             ▼
+       GitHub / staging
+```
 
-```bash
-# 1. Define apps with pinned versions (custom apps only)
-cat > production/apps.json <<EOF
+The staging and production servers are deployment targets. Do not perform merges, rebases, application development, or image-building changes there as part of the normal promotion workflow.
+
+### Build once, promote the same artifact
+
+For a release candidate:
+
+```text
+local build
+    ↓
+immutable registry tag
+    ↓
+staging
+    ↓
+UAT
+    ↓
+same image digest
+    ↓
+production
+```
+
+Do not rebuild the application image from `main` after staging passes. Production should receive the same tested image artifact.
+
+## 3. What belongs in `apps.json`
+
+Frappe Framework is **not** listed in `apps.json`.
+
+The Framework is selected through:
+
+```text
+FRAPPE_BRANCH
+```
+
+passed to `images/layered/Containerfile`.
+
+`apps.json` contains ERPNext, HRMS, India Compliance, and other applications that should be baked into the image.
+
+Example:
+
+```json
 [
   {
     "url": "https://github.com/frappe/erpnext",
-    "branch": "v15.88.1"
+    "branch": "v16.34.2"
+  },
+  {
+    "url": "https://github.com/frappe/hrms",
+    "branch": "v16.18.1"
   },
   {
     "url": "https://github.com/resilient-tech/india-compliance",
-    "branch": "v15.23.2"
-  }
-]
-EOF
-
-# 2. Build immutable image
-export APPS_JSON_BASE64=$(base64 -w0 production/apps.json)
-BUILD_TAG="ghcr.io/YOUR_USERNAME/erpnext-custom:$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
-
-docker build \
-  --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
-  --build-arg=FRAPPE_BRANCH=v15.88.1 \
-  --build-arg=APPS_JSON_BASE64=$APPS_JSON_BASE64 \
-  --tag=$BUILD_TAG \
-  --tag=ghcr.io/YOUR_USERNAME/erpnext-custom:production-latest \
-  --file=images/layered/Containerfile .
-
-# 3. Push to registry
-docker push $BUILD_TAG
-docker push ghcr.io/YOUR_USERNAME/erpnext-custom:production-latest
-
-# 4. Update production config
-nano production/production.env
-# Set: CUSTOM_TAG=20251118-4c860c6
-
-# 5. Deploy
-./scripts/deploy.sh --regenerate
-./scripts/deploy.sh
-
-# 6. Activate apps on sites
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost install-app india_compliance
-
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost migrate
-```
-
----
-
-## Step-by-Step Guide
-
-### Step 1: Find App Versions
-
-**Goal**: Pin exact versions for immutability
-
-#### For Third-Party Apps (GitHub)
-
-```bash
-# Find latest stable tags
-curl -s https://api.github.com/repos/frappe/erpnext/tags | grep '"name"' | head -5
-curl -s https://api.github.com/repos/resilient-tech/india-compliance/tags | grep '"name"' | head -5
-
-# For Frappe Framework (use as FRAPPE_BRANCH build arg)
-curl -s https://api.github.com/repos/frappe/frappe/tags | grep '"name"' | head -5
-
-# Or browse tags on GitHub:
-# https://github.com/frappe/frappe/tags
-# https://github.com/frappe/erpnext/tags
-# https://github.com/resilient-tech/india-compliance/tags
-```
-
-**Example output**:
-```json
-"name": "v15.88.1",  ← Use this specific tag
-"name": "v15.88.0",
-"name": "v15.87.2",
-```
-
-#### For Custom Apps (Your Repository)
-
-```bash
-# Tag your custom app first
-cd /path/to/your/custom-app
-git tag v1.0.0
-git push origin v1.0.0
-
-# Or use specific commit
-git log --oneline -5
-# abc1234 Fix invoice bug  ← Use this commit hash
-```
-
-### Step 2: Create apps.json with Pinned Versions
-
-**Location**: `production/apps.json`
-
-**Bad Example** (not immutable):
-```json
-[
-  {
-    "url": "https://github.com/frappe/erpnext",
-    "branch": "version-15"  ← WRONG: Moving target!
+    "branch": "v16.9.0"
   }
 ]
 ```
 
-**Good Example** (immutable):
+For production images, prefer release tags or exact commits over moving branches.
+
+Validate the manifest before building:
+
+```bash
+python3 -m json.tool production/apps.json
+```
+
+## 4. Current verified v16 stack
+
+The current locally verified v16 application set is:
+
+| Component | Version |
+|---|---:|
+| Frappe Framework | 16.33.1 |
+| ERPNext | 16.34.2 |
+| HRMS | 16.18.1 |
+| India Compliance | 16.9.0 |
+| Python | 3.14.7 |
+
+The custom image is built with:
+
+```text
+FRAPPE_BRANCH=version-16
+```
+
+which currently resolves through:
+
+```text
+frappe/build:version-16
+frappe/base:version-16
+```
+
+For the current verified build, the local image was:
+
+```text
+ghcr.io/duthink/erpnext-custom:v16-test-v3.2.2
+```
+
+with local image ID:
+
+```text
+sha256:25506deba681e66f9356b927a8a0450baa88725d2b2e41fab3614f5a3deab559
+```
+
+The local image build and `bench version` check completed successfully.
+
+## 5. Prerequisites
+
+Verify Docker and Compose:
+
+```bash
+docker --version
+docker compose version
+docker buildx version
+```
+
+The layered build requires BuildKit secret support, so use `docker buildx build`.
+
+The required Frappe base images are:
+
+```bash
+docker pull frappe/build:version-16
+docker pull frappe/base:version-16
+```
+
+Verify the runtime if required:
+
+```bash
+docker run --rm frappe/base:version-16 python --version
+```
+
+## 6. Build a local test image
+
+For a temporary test manifest, use a separate file such as:
+
+```text
+production/apps.v16-test.json
+```
+
+Do not overwrite the production manifest merely to perform a test.
+
+Example:
+
 ```json
 [
   {
     "url": "https://github.com/frappe/erpnext",
-    "branch": "v15.88.1"  ← CORRECT: Frozen version
+    "branch": "v16.34.2"
+  },
+  {
+    "url": "https://github.com/frappe/hrms",
+    "branch": "v16.18.1"
   },
   {
     "url": "https://github.com/resilient-tech/india-compliance",
-    "branch": "v15.23.2"  ← Specific tag
-  },
-  {
-    "url": "https://github.com/YOUR_ORG/custom-hrms-integration",
-    "branch": "v2.1.0"  ← Your custom app
+    "branch": "v16.9.0"
   }
 ]
 ```
 
-**Using Commit Hashes** (even more precise):
-```json
-[
-  {
-    "url": "https://github.com/frappe/erpnext",
-    "branch": "version-15",
-    "commit": "a1b2c3d4e5f6"  ← Exact commit
-  }
-]
-```
+Build:
 
-**Edit the file**:
 ```bash
-nano production/apps.json
-```
-
-**Important**: \n- **Do NOT include Frappe Framework in apps.json** - it's controlled via `FRAPPE_BRANCH` build arg\n- The upstream Containerfile expects Frappe via build args, not in apps.json\n- Only include custom/third-party apps (ERPNext, india_compliance, HRMS, etc.)\n- Use specific tags for immutability\n\n### Step 3: Build the Immutable Image
-
-**Generate unique image tag**:
-```bash
-# Components of the tag
-BUILD_DATE=$(date +%Y%m%d)           # 20251118
-GIT_SHA=$(git rev-parse --short HEAD) # 4c860c6
-USERNAME="duthink"  # Your GitHub username
-
-# Full image tags
-IMAGE_TAG="ghcr.io/${USERNAME}/erpnext-custom:${BUILD_DATE}-${GIT_SHA}"
-IMAGE_LATEST="ghcr.io/${USERNAME}/erpnext-custom:production-latest"
-
-echo "Will create tags:"
-echo "  Specific: $IMAGE_TAG"
-echo "  Latest:   $IMAGE_LATEST"
-```
-
-**Encode apps.json**:
-```bash
-export APPS_JSON_BASE64=$(base64 -w0 production/apps.json)
-
-# Verify it worked
-echo "Base64 encoded (first 50 chars): ${APPS_JSON_BASE64:0:50}..."
-```
-
-**Build the image**:
-```bash
-docker build \
+docker buildx build \
+  --load \
+  --secret id=apps_json,src=production/apps.v16-test.json \
+  --build-arg=FRAPPE_IMAGE_PREFIX=frappe \
   --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
-  --build-arg=FRAPPE_BRANCH=v15.88.1 \
-  --build-arg=PYTHON_VERSION=3.11.6 \
-  --build-arg=NODE_VERSION=18.18.2 \
-  --build-arg=APPS_JSON_BASE64=$APPS_JSON_BASE64 \
-  --tag=$IMAGE_TAG \
-  --tag=$IMAGE_LATEST \
+  --build-arg=FRAPPE_BRANCH=version-16 \
+  --tag=ghcr.io/duthink/erpnext-custom:v16-test \
   --file=images/layered/Containerfile \
   .
 ```
 
-**What happens during build** (10-15 minutes):
-1. Installs Frappe Framework v15.88.1 (from FRAPPE_BRANCH arg)
-2. Installs all custom apps from `apps.json`
-3. Installs Python dependencies
-4. Installs Node.js dependencies
-5. **Runs `bench build`** (compiles all assets!)
-6. Creates final image with everything baked in
+### Why `--load`?
 
-**Verify build success**:
-```bash
-# Check images exist
-docker images | grep erpnext-custom
+`--load` imports the resulting image into the local Docker image store so it can immediately be used with `docker run` or a local Compose test project.
 
-# Expected output:
-# ghcr.io/duthink/erpnext-custom  20251118-4c860c6    e3768a4d428a  1.5GB
-# ghcr.io/duthink/erpnext-custom  production-latest   e3768a4d428a  1.5GB
-```
+## 7. Verify the image before deploying it
 
-### Step 4: Push to Registry
-
-**Push both tags**:
-```bash
-# Push specific version (immutable)
-docker push ghcr.io/${USERNAME}/erpnext-custom:${BUILD_DATE}-${GIT_SHA}
-
-# Push latest (convenience pointer)
-docker push ghcr.io/${USERNAME}/erpnext-custom:production-latest
-```
-
-**Note**: The second push is instant (just updates the tag pointer, no re-upload).
-
-**Verify on GitHub**:
-1. Go to: https://github.com/YOUR_USERNAME?tab=packages
-2. Find `erpnext-custom`
-3. Check both tags exist
-
-### Step 5: Update Production Configuration
-
-**Edit production environment**:
-```bash
-nano production/production.env
-```
-
-**Update these lines**:
-```env
-# Custom Image Configuration
-CUSTOM_IMAGE=ghcr.io/duthink/erpnext-custom
-CUSTOM_TAG=20251118-4c860c6  # Use your BUILD_DATE-GIT_SHA
-PULL_POLICY=always
-```
-
-**Why not use `production-latest`?**
-- Production needs **specific, immutable tags**
-- `production-latest` moves when you push new images
-- Specific tags enable reliable rollbacks
-
-### Step 6: Deploy the New Image
-
-**Regenerate production.yaml**:
-```bash
-./scripts/deploy.sh --regenerate
-```
-
-**What this does**:
-- Merges base `compose.yaml` with overlays
-- Injects your `CUSTOM_IMAGE` and `CUSTOM_TAG`
-- Generates `production/production.yaml`
-
-**Deploy to production**:
-```bash
-./scripts/deploy.sh
-```
-
-**What this does**:
-1. Validates configuration
-2. Deploys Traefik (if not running)
-3. Deploys MariaDB (if not running)
-4. **Pulls new image** from registry
-5. Recreates containers with new image
-6. Starts all services
-
-**Verify deployment**:
-```bash
-# Check all containers use new image
-docker compose -f production/production.yaml images
-
-# Expected output:
-# CONTAINER        IMAGE                                             
-# backend          ghcr.io/duthink/erpnext-custom:20251118-4c860c6
-# frontend         ghcr.io/duthink/erpnext-custom:20251118-4c860c6
-# queue-short      ghcr.io/duthink/erpnext-custom:20251118-4c860c6
-# ...
-```
-
-### Step 7: Activate Apps on Sites
-
-**Important**: Apps are in the image, but not yet active on your sites.
-
-**Install app on existing site**:
-```bash
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost install-app india_compliance
-```
-
-**Run migrations**:
-```bash
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost migrate
-```
-
-**That's it!** No `bench build` or asset sync needed. Assets are already compiled and present in all containers.
-
-**Verify it works**:
-```bash
-# Check app is installed
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost list-apps
-
-# Expected output:
-# frappe 15.88.2
-# erpnext 15.88.1
-# india_compliance 15.23.2
-
-# Test the site
-curl -k -I https://erp.localhost/app/home
-# Should return: HTTP/2 200
-```
-
----
-
-## Real-World Example: India Compliance
-
-### Complete Workflow from Scratch
+Check the application versions:
 
 ```bash
-# 1. Check current stable version
-curl -s https://api.github.com/repos/resilient-tech/india-compliance/tags | grep '"name"' | head -3
-# Output: "name": "v15.23.2"
+docker run --rm \
+  ghcr.io/duthink/erpnext-custom:v16-test \
+  bench version
+```
 
-# 2. Create apps.json (custom apps only - NOT Frappe)
-cat > production/apps.json <<EOF
-[
-  {
-    "url": "https://github.com/frappe/erpnext",
-    "branch": "v15.88.1"
-  },
-  {
-    "url": "https://github.com/resilient-tech/india-compliance",
-    "branch": "v15.23.2"
-  }
-]
-EOF
+Expected structure:
 
-# 3. Build image
-export APPS_JSON_BASE64=$(base64 -w0 production/apps.json)
+```text
+erpnext 16.34.2
+frappe 16.33.1
+hrms 16.18.1
+india_compliance 16.9.0
+```
+
+Check Python:
+
+```bash
+docker run --rm \
+  ghcr.io/duthink/erpnext-custom:v16-test \
+  python --version
+```
+
+Check the image itself:
+
+```bash
+docker image inspect \
+  ghcr.io/duthink/erpnext-custom:v16-test \
+  --format '{{.Id}}'
+```
+
+Record the resulting image identity for the local test.
+
+## 8. Create an immutable release tag
+
+For a candidate that is ready for staging, use a traceable immutable tag.
+
+Example:
+
+```bash
 BUILD_DATE=$(date +%Y%m%d)
 GIT_SHA=$(git rev-parse --short HEAD)
 
-docker build \
+IMAGE="ghcr.io/duthink/erpnext-custom"
+IMAGE_TAG="${IMAGE}:${BUILD_DATE}-${GIT_SHA}"
+
+echo "Image: $IMAGE_TAG"
+```
+
+The Git commit should represent the exact repository state used to build the image.
+
+Do not use `production-latest` as the production version identifier.
+
+## 9. Build the staging candidate
+
+From the local checkout:
+
+```bash
+docker buildx build \
+  --load \
+  --secret id=apps_json,src=production/apps.json \
+  --build-arg=FRAPPE_IMAGE_PREFIX=frappe \
   --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
-  --build-arg=FRAPPE_BRANCH=v15.88.1 \
-  --build-arg=APPS_JSON_BASE64=$APPS_JSON_BASE64 \
-  --tag=ghcr.io/duthink/erpnext-custom:${BUILD_DATE}-${GIT_SHA} \
-  --tag=ghcr.io/duthink/erpnext-custom:production-latest \
-  --file=images/layered/Containerfile .
-
-# Takes 10-15 minutes...
-
-# 4. Push to registry
-docker push ghcr.io/duthink/erpnext-custom:${BUILD_DATE}-${GIT_SHA}
-docker push ghcr.io/duthink/erpnext-custom:production-latest
-
-# 5. Update production config
-echo "CUSTOM_TAG=${BUILD_DATE}-${GIT_SHA}" >> production/production.env
-
-# 6. Deploy
-./scripts/deploy.sh --regenerate
-./scripts/deploy.sh
-
-# 7. Activate on site
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost install-app india_compliance
-
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost migrate
-
-# 8. Verify
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost list-apps
+  --build-arg=FRAPPE_BRANCH=version-16 \
+  --tag="$IMAGE_TAG" \
+  --file=images/layered/Containerfile \
+  .
 ```
 
-### What You Get
-
-- ✅ India Compliance v15.23.2 installed
-- ✅ All GST, TDS, and compliance features available
-- ✅ Assets pre-compiled (no 404 errors)
-- ✅ Can rollback to previous image anytime
-- ✅ Image SHA = exact deployed code
-
----
-
-## Adding Custom Apps
-
-### Scenario: Add Your Own Frappe App
-
-**1. Prepare your custom app**:
-```bash
-cd /path/to/your/custom_integrations
-
-# Tag a release
-git tag v1.0.0
-git push origin v1.0.0
-
-# Or note the commit hash
-git log --oneline -1
-# abc1234 Add webhook integration
-```
-
-**2. Add to apps.json**:
-```json
-[
-  {
-    "url": "https://github.com/frappe/erpnext",
-    "branch": "v15.88.1"
-  },
-  {
-    "url": "https://github.com/resilient-tech/india-compliance",
-    "branch": "v15.23.2"
-  },
-  {
-    "url": "https://github.com/YOUR_ORG/custom_integrations",
-    "branch": "v1.0.0"
-  }
-]
-```
-
-**3. Rebuild image** (same process as above):
-```bash
-# New image tag reflects new date
-BUILD_DATE=$(date +%Y%m%d)  # 20251119
-GIT_SHA=$(git rev-parse --short HEAD)
-
-export APPS_JSON_BASE64=$(base64 -w0 production/apps.json)
-
-docker build \
-  --build-arg=APPS_JSON_BASE64=$APPS_JSON_BASE64 \
-  --tag=ghcr.io/duthink/erpnext-custom:${BUILD_DATE}-${GIT_SHA} \
-  --tag=ghcr.io/duthink/erpnext-custom:production-latest \
-  --file=images/layered/Containerfile .
-
-docker push ghcr.io/duthink/erpnext-custom:${BUILD_DATE}-${GIT_SHA}
-docker push ghcr.io/duthink/erpnext-custom:production-latest
-```
-
-**4. Deploy new image**:
-```bash
-# Update production config
-nano production/production.env
-# CUSTOM_TAG=20251119-def5678
-
-./scripts/deploy.sh --regenerate
-./scripts/deploy.sh
-```
-
-**5. Install on sites**:
-```bash
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost install-app custom_integrations
-
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost migrate
-```
-
-### Private Repositories
-
-**For private GitHub repos**:
-
-```json
-[
-  {
-    "url": "https://YOUR_TOKEN@github.com/YOUR_ORG/private_app",
-    "branch": "v1.0.0"
-  }
-]
-```
-
-**Security Note**: Never commit tokens to git! Use environment variables:
+Verify:
 
 ```bash
-# In CI/CD or local build
-export GITHUB_TOKEN=your_token
-export APPS_JSON_BASE64=$(cat production/apps.json | sed "s/YOUR_TOKEN/$GITHUB_TOKEN/g" | base64 -w0)
+docker run --rm "$IMAGE_TAG" bench version
 ```
 
----
+Do not push an image that has not passed the local verification.
 
-## Updating Apps
+## 10. Push the candidate image
 
-### Scenario: India Compliance Releases v15.24.0
-
-**1. Check for new version**:
-```bash
-curl -s https://api.github.com/repos/resilient-tech/india-compliance/tags | grep '"name"' | head -3
-# New output: "name": "v15.24.0"
-```
-
-**2. Update apps.json**:
-```bash
-nano production/apps.json
-
-# Change:
-# "branch": "v15.23.2"  → "branch": "v15.24.0"
-```
-
-**3. Rebuild with new tag**:
-```bash
-export APPS_JSON_BASE64=$(base64 -w0 production/apps.json)
-BUILD_DATE=$(date +%Y%m%d)
-GIT_SHA=$(git rev-parse --short HEAD)
-
-docker build \
-  --build-arg=APPS_JSON_BASE64=$APPS_JSON_BASE64 \
-  --tag=ghcr.io/duthink/erpnext-custom:${BUILD_DATE}-${GIT_SHA} \
-  --tag=ghcr.io/duthink/erpnext-custom:production-latest \
-  --file=images/layered/Containerfile .
-
-docker push ghcr.io/duthink/erpnext-custom:${BUILD_DATE}-${GIT_SHA}
-docker push ghcr.io/duthink/erpnext-custom:production-latest
-```
-
-**4. Test in staging first** (recommended):
-```bash
-# Use production-latest for staging
-nano staging/staging.env
-# CUSTOM_TAG=production-latest
-
-./scripts/deploy-staging.sh
-# Test thoroughly...
-```
-
-**5. Deploy to production**:
-```bash
-nano production/production.env
-# CUSTOM_TAG=20251125-xyz9999  # New specific tag
-
-./scripts/deploy.sh --regenerate
-./scripts/deploy.sh
-```
-
-**6. Migrate sites**:
-```bash
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.localhost migrate
-```
-
-**7. Rollback if issues**:
-```bash
-# Just change to old tag
-nano production/production.env
-# CUSTOM_TAG=20251118-4c860c6  # Previous working version
-
-./scripts/deploy.sh
-# Old image still exists in registry!
-```
-
----
-
-## Deployment Workflow
-
-### Standard Deployment Process
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ 1. Update apps.json with pinned versions                   │
-│    └─ Commit to git                                         │
-│                                                              │
-│ 2. Build image                                              │
-│    └─ Tag with BUILD_DATE-GIT_SHA                           │
-│    └─ Also tag as production-latest                         │
-│                                                              │
-│ 3. Push to registry                                         │
-│    └─ Both tags pushed                                      │
-│                                                              │
-│ 4. Test (optional but recommended)                          │
-│    └─ Pull production-latest in staging                     │
-│    └─ Run smoke tests                                       │
-│                                                              │
-│ 5. Deploy to production                                     │
-│    └─ Update CUSTOM_TAG with specific tag                   │
-│    └─ Regenerate production.yaml                            │
-│    └─ Deploy (pulls new image)                              │
-│                                                              │
-│ 6. Migrate sites                                            │
-│    └─ bench migrate on each site                            │
-│                                                              │
-│ 7. Monitor                                                  │
-│    └─ Check logs                                            │
-│    └─ Verify assets load                                    │
-│    └─ Test critical features                                │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### CI/CD Integration (GitHub Actions Example)
-
-```yaml
-# .github/workflows/build-image.yml
-name: Build ERPNext Custom Image
-
-on:
-  push:
-    paths:
-      - 'production/apps.json'
-      - 'images/**'
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-      
-      - name: Build image
-        run: |
-          export APPS_JSON_BASE64=$(base64 -w0 production/apps.json)
-          BUILD_DATE=$(date +%Y%m%d)
-          GIT_SHA=$(git rev-parse --short HEAD)
-          
-          docker build \
-            --build-arg=APPS_JSON_BASE64=$APPS_JSON_BASE64 \
-            --tag=ghcr.io/${{ github.repository_owner }}/erpnext-custom:${BUILD_DATE}-${GIT_SHA} \
-            --tag=ghcr.io/${{ github.repository_owner }}/erpnext-custom:production-latest \
-            --file=images/layered/Containerfile .
-      
-      - name: Push image
-        run: |
-          BUILD_DATE=$(date +%Y%m%d)
-          GIT_SHA=$(git rev-parse --short HEAD)
-          
-          docker push ghcr.io/${{ github.repository_owner }}/erpnext-custom:${BUILD_DATE}-${GIT_SHA}
-          docker push ghcr.io/${{ github.repository_owner }}/erpnext-custom:production-latest
-```
-
----
-
-## Uninstall Apps
-
-When you need to remove an app from a site:
+Log in to GHCR using credentials appropriate for your environment:
 
 ```bash
-# 1. Backup first (uninstall deletes DocTypes and data!)
-./scripts/backup-site.sh erp.example.com --with-files --auto-copy
-
-# 2. Uninstall from site
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.example.com uninstall-app india_compliance
-
-# 3. Clear cache and restart
-docker compose -f production/production.yaml exec backend \
-  bench --site erp.example.com clear-cache
-docker compose -f production/production.yaml restart frontend
+echo "$GITHUB_TOKEN" | \
+  docker login ghcr.io \
+  -u duthink \
+  --password-stdin
 ```
 
-**Important Notes:**
-- The app remains in the image's `/apps/` directory but is deactivated on the site
-- No `bench build` or asset sync needed—assets are pre-compiled in the image
-- Uninstall permanently deletes all app DocTypes and database records
-- Always backup before uninstalling
-- To completely remove an app from future deployments: rebuild image without it in `apps.json`
-
-**Complete Removal Workflow:**
-
-If you want to stop deploying an app entirely:
+Push the immutable tag:
 
 ```bash
-# 1. Uninstall from all sites first
-docker compose -f production/production.yaml exec backend \
-  bench --site site1.example.com uninstall-app india_compliance
-docker compose -f production/production.yaml exec backend \
-  bench --site site2.example.com uninstall-app india_compliance
-
-# 2. Remove from apps.json
-nano production/apps.json
-# Delete the india_compliance entry
-
-# 3. Rebuild image without the app
-export APPS_JSON_BASE64=$(base64 -w0 production/apps.json)
-NEW_TAG="ghcr.io/YOUR_USERNAME/erpnext-custom:$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
-
-docker build \
-  --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
-  --build-arg=FRAPPE_BRANCH=v15.88.1 \
-  --build-arg=APPS_JSON_BASE64=$APPS_JSON_BASE64 \
-  --tag=$NEW_TAG \
-  --file=images/layered/Containerfile .
-
-docker push $NEW_TAG
-
-# 4. Update production.env and deploy
-nano production/production.env
-# CUSTOM_TAG=20251119-newsha
-
-./scripts/deploy.sh --regenerate
-./scripts/deploy.sh
+docker push "$IMAGE_TAG"
 ```
 
-**Verify Clean State:**
-```bash
-# Check app is not in image
-docker compose -f production/production.yaml exec backend bench list-apps
+Then retrieve the registry digest:
 
-# Check app is not active on sites
-docker compose -f production/production.yaml exec backend \
+```bash
+docker inspect "$IMAGE_TAG" \
+  --format '{{json .RepoDigests}}'
+```
+
+The registry digest is the preferred identity for verifying that staging and production use the same image artifact.
+
+## 11. Staging deployment
+
+The image tag is selected in the staging environment configuration.
+
+The staging deployment should:
+
+```text
+1. Pull the immutable candidate image
+2. Start the staging Compose project
+3. Run database migration if required
+4. Verify application versions
+5. Perform UAT
+```
+
+Staging and production are separate Compose projects and separate site/data volumes.
+
+Do not copy staging environment files, site volumes, generated Compose files, or database credentials into production.
+
+## 12. Activate applications on a site
+
+Putting an application into the image does not automatically install it into every site's database.
+
+For an existing site:
+
+```bash
+docker compose \
+  -f production/production.yaml \
+  exec backend \
   bench --site erp.example.com list-apps
 ```
 
----
+Install an application when required:
 
-## Troubleshooting
-
-### Issue: Build Fails with "App not found"
-
-**Symptom**:
-```
-ERROR: Could not find app: india_compliance
-```
-
-**Causes**:
-- Typo in repository URL
-- Branch/tag doesn't exist
-- Private repo without authentication
-
-**Solution**:
 ```bash
-# Verify URL and branch exist
-curl -I https://github.com/resilient-tech/india-compliance
-curl -I https://github.com/resilient-tech/india-compliance/tree/v15.23.2
-
-# Check apps.json syntax
-cat production/apps.json | python3 -m json.tool
+docker compose \
+  -f production/production.yaml \
+  exec backend \
+  bench --site erp.example.com install-app hrms
 ```
 
-### Issue: Build Fails with "Node modules not found"
+Then migrate:
 
-**Symptom**:
-```
-ERROR: Cannot find module 'xyz'
-```
-
-**Cause**: Upstream dependency issue in one of the apps
-
-**Solution**:
 ```bash
-# Try building with specific Node version
-docker build \
-  --build-arg=NODE_VERSION=18.18.2 \
-  ...
-
-# Or check app's package.json for required Node version
+docker compose \
+  -f production/production.yaml \
+  exec backend \
+  bench --site erp.example.com migrate
 ```
 
-### Issue: Assets Return 404 After Deployment
+For a major-version upgrade, take a verified backup before running migrations.
 
-**Symptom**: CSS/JS files show 404 in browser
+## 13. Production promotion
 
-**This should NOT happen with Pattern 2**, but if it does:
+Production should use the **same immutable image that passed staging/UAT**.
 
-**Diagnosis**:
+Do not rebuild it from `main`.
+
+After staging approval:
+
+```text
+GitHub staging
+      │
+      ▼
+GitHub main
+      │
+      ▼
+Production deploy
+      │
+      ▼
+same image tag / digest
+```
+
+Set production:
+
+```env
+CUSTOM_IMAGE=ghcr.io/duthink/erpnext-custom
+CUSTOM_TAG=<approved-immutable-tag>
+PULL_POLICY=always
+```
+
+Then regenerate the generated Compose file:
+
 ```bash
-# Verify all containers use same image
+./scripts/deploy.sh --regenerate
+```
+
+Inspect the generated image references before deploying:
+
+```bash
+grep -n 'image:' production/production.yaml
+```
+
+Then deploy:
+
+```bash
+./scripts/deploy.sh
+```
+
+## 14. Verify production
+
+Check the running containers:
+
+```bash
+docker compose -f production/production.yaml ps
+```
+
+Check the image references:
+
+```bash
 docker compose -f production/production.yaml images
-
-# Check if assets exist in image
-docker compose -f production/production.yaml exec backend \
-  ls /home/frappe/frappe-bench/apps/india_compliance/india_compliance/public/dist
-
-# Check frontend can access them
-docker compose -f production/production.yaml exec frontend \
-  ls /home/frappe/frappe-bench/apps/india_compliance/india_compliance/public/dist
 ```
 
-**Solution**: Rebuild image, ensure `bench build` completed during build.
+Check application versions:
 
-### Issue: Image Size Too Large
-
-**Symptom**: Image is 3+ GB
-
-**Cause**: Includes development dependencies or build cache
-
-**Solution**:
-```dockerfile
-# Multi-stage builds help (already in images/layered/Containerfile)
-# Ensure .dockerignore is present:
-cat > .dockerignore <<EOF
-.git
-.github
-node_modules
-*.log
-development/
-docs/
-tests/
-EOF
-```
-
-### Issue: Cannot Push to Registry
-
-**Symptom**:
-```
-denied: permission_denied
-```
-
-**Solutions**:
 ```bash
-# 1. Verify login
-docker login ghcr.io -u YOUR_USERNAME
-
-# 2. Check token has write:packages scope
-# Go to: https://github.com/settings/tokens
-
-# 3. Ensure repository exists or image name matches your username
-# Image must be: ghcr.io/YOUR_USERNAME/image-name
+docker compose -f production/production.yaml \
+  exec backend \
+  bench version
 ```
 
----
+Check site applications:
 
-## Best Practices
+```bash
+docker compose -f production/production.yaml \
+  exec backend \
+  bench --site erp.example.com list-apps
+```
 
-### 1. Version Pinning
+Clear cache after a major application update when appropriate:
 
-**Always use specific tags or commits**:
+```bash
+docker compose -f production/production.yaml \
+  exec backend \
+  bench --site erp.example.com clear-cache
+```
+
+Run the application smoke tests and critical business workflows before closing the deployment window.
+
+## 15. Rollback
+
+The image rollback mechanism is:
+
+```text
+current image
+     ↓
+previous approved immutable image
+```
+
+Change `CUSTOM_TAG` back to the previously known-good image tag:
+
+```env
+CUSTOM_TAG=<previous-approved-tag>
+```
+
+Regenerate:
+
+```bash
+./scripts/deploy.sh --regenerate
+```
+
+Then redeploy:
+
+```bash
+./scripts/deploy.sh
+```
+
+**Important:** an application-image rollback is not automatically a database rollback.
+
+If a migration has changed the database schema, reverting the container image alone may not restore the previous database state. For major-version migrations, the database backup/restore procedure is the authoritative rollback mechanism.
+
+## 16. Updating an application
+
+To update an application:
+
+```text
+1. Change the pinned version in apps.json
+2. Commit the change locally
+3. Build a new immutable image
+4. Verify bench version
+5. Push the new image
+6. Deploy to staging
+7. Perform UAT
+8. Promote the same artifact to production
+```
+
+Example:
+
 ```json
-// ✅ GOOD
-{"url": "...", "branch": "v15.23.2"}
-{"url": "...", "branch": "main", "commit": "abc1234"}
-
-// ❌ BAD
-{"url": "...", "branch": "version-15"}
-{"url": "...", "branch": "main"}
+{
+  "url": "https://github.com/resilient-tech/india-compliance",
+  "branch": "v16.10.0"
+}
 ```
 
-### 2. Image Tagging Strategy
+Rebuild using the same BuildKit-secret workflow:
 
-**Use semantic, traceable tags**:
 ```bash
-# Format: YYYYMMDD-GITSHA
-20251118-4c860c6  # Date + git commit
-
-# Why?
-✅ Chronological ordering
-✅ Git traceability
-✅ Unique identifier
-✅ Easy to find in registry
+docker buildx build \
+  --load \
+  --secret id=apps_json,src=production/apps.json \
+  --build-arg=FRAPPE_IMAGE_PREFIX=frappe \
+  --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
+  --build-arg=FRAPPE_BRANCH=version-16 \
+  --tag="$IMAGE_TAG" \
+  --file=images/layered/Containerfile \
+  .
 ```
 
-### 3. Keep Old Images
+## 17. Adding a custom app
 
-**Don't delete old images immediately**:
+Add the application to `production/apps.json`:
+
+```json
+[
+  {
+    "url": "https://github.com/frappe/erpnext",
+    "branch": "v16.34.2"
+  },
+  {
+    "url": "https://github.com/frappe/hrms",
+    "branch": "v16.18.1"
+  },
+  {
+    "url": "https://github.com/resilient-tech/india-compliance",
+    "branch": "v16.9.0"
+  },
+  {
+    "url": "https://github.com/YOUR_ORG/your-app",
+    "branch": "v1.0.0"
+  }
+]
+```
+
+Build and test a new immutable image.
+
+The application being present in the image does not by itself modify an existing site's database. Use `bench install-app` and `bench migrate` where required.
+
+## 18. Private application repositories
+
+Do not commit access tokens inside `apps.json`.
+
+For private repositories, use an authentication mechanism appropriate for the build environment and ensure credentials are supplied as secrets rather than committed files or build arguments.
+
+Never expose a token through:
+
+```text
+Dockerfile ARG
+Docker image layer
+Git commit
+public apps.json
+```
+
+The BuildKit secret mechanism used by the current Containerfile is intended to avoid leaking the application manifest through normal image build arguments.
+
+## 19. CI/CD
+
+The repository may use GitHub Actions to build and publish images.
+
+The important requirement is that CI uses the same layered Containerfile and the same BuildKit secret mechanism as local builds:
+
+```yaml
+secrets: |
+  id=apps_json,src=production/apps.json
+```
+
+The workflow should:
+
+```text
+checkout
+  ↓
+prepare apps.json
+  ↓
+build with BuildKit secret
+  ↓
+smoke-test image
+  ↓
+push immutable image
+```
+
+Do not maintain a separate CI implementation based on `APPS_JSON_BASE64`.
+
+The upstream reusable image workflow in this repository already demonstrates the BuildKit secret pattern.
+
+## 20. Troubleshooting
+
+### Build fails with "app not found"
+
+Validate the manifest:
+
 ```bash
-# Keep last 5-10 production images
-# Allows rollback window of several months
+python3 -m json.tool production/apps.json
 ```
 
-**Cleanup script**:
+Verify the repository:
+
 ```bash
-# Keep only last 10 tags (manual cleanup)
-# Use GitHub Packages retention policies
+git ls-remote https://github.com/frappe/erpnext.git
+git ls-remote https://github.com/resilient-tech/india-compliance.git
 ```
 
-### 4. Document Image Contents
+Verify the requested tag:
 
-**Tag your git commits when building images**:
 ```bash
-git tag release-20251118-india-compliance-v15.23.2
-git push origin release-20251118-india-compliance-v15.23.2
+git ls-remote --tags \
+  https://github.com/frappe/erpnext.git \
+  v16.34.2
 ```
 
-**Maintain a changelog**:
-```markdown
-## 20251118-4c860c6
-- Added india_compliance v15.23.2
-- Updated erpnext to v15.88.1
+Check private repository authentication separately.
 
-## 20251117-abc1234
-- Initial production image
-- erpnext v15.88.1
-```
+### Build fails before `bench init`
 
-### 5. Test Before Production
+Verify the base images:
 
-**Always test new images**:
 ```bash
-# Pull latest in staging
-docker pull ghcr.io/duthink/erpnext-custom:production-latest
-
-# Run tests
-# - Create test site
-# - Install apps
-# - Run migrations
-# - Test critical workflows
-
-# Only promote to production after validation
+docker pull frappe/build:version-16
+docker pull frappe/base:version-16
 ```
 
-### 6. Automate Builds
+Verify BuildKit:
 
-**Use CI/CD for consistency**:
-- Automatic builds on `apps.json` changes
-- Automatic tagging with git SHA
-- Automatic push to registry
-- Manual approval for production deployment
-
-### 7. Monitor Image Registry
-
-**Set up alerts**:
-- Failed builds
-- Image size growing unexpectedly
-- Old images not being cleaned up
-
-### 8. Security Scanning
-
-**Scan images before production**:
 ```bash
-# Using Trivy (example)
-trivy image ghcr.io/duthink/erpnext-custom:20251118-4c860c6
+docker buildx version
+```
 
-# Fix critical vulnerabilities before deploying
+### Build does not see `apps.json`
+
+Use:
+
+```bash
+--secret id=apps_json,src=production/apps.json
+```
+
+and do not replace it with:
+
+```bash
+--build-arg=APPS_JSON_BASE64=...
+```
+
+The current layered Containerfile expects the secret named exactly:
+
+```text
+apps_json
+```
+
+### Application versions are unexpected
+
+Check the image:
+
+```bash
+docker run --rm "$IMAGE_TAG" bench version
+```
+
+Remember that:
+
+```text
+FRAPPE_BRANCH=version-16
+```
+
+selects the Frappe framework line through the Frappe base images, while individual applications are pinned in `apps.json`.
+
+Because `version-16` is a moving reference, record the base-image digest used for important production builds.
+
+### Assets return 404
+
+First verify every application container is running the same image:
+
+```bash
+docker compose -f production/production.yaml images
+```
+
+Then inspect assets inside the image/container.
+
+The current layered image architecture moves built assets into the image and links them into the mounted sites volume during container startup.
+
+Restart/redeploy the affected application containers rather than manually copying application assets between containers.
+
+### Cannot push to GHCR
+
+Check authentication:
+
+```bash
+docker login ghcr.io
+```
+
+Then:
+
+```bash
+docker push "$IMAGE_TAG"
+```
+
+If authentication succeeds but push is denied, verify the account/token has permission to publish the package.
+
+## 21. Operational rules
+
+### Rule 1 — Never build production on the server
+
+Build from the local development checkout.
+
+### Rule 2 — Never deploy an untested image
+
+At minimum verify:
+
+```bash
+bench version
+```
+
+and perform the local/staging smoke tests.
+
+### Rule 3 — Use immutable image tags
+
+Prefer:
+
+```text
+YYYYMMDD-GITSHA
+```
+
+or another uniquely traceable tag.
+
+Avoid relying on:
+
+```text
+latest
+production-latest
+```
+
+as the production identity.
+
+### Rule 4 — Promote the same artifact
+
+Record the registry digest and ensure staging and production point to the same image digest.
+
+### Rule 5 — Keep old images
+
+Retain previous production images long enough to support a practical rollback window.
+
+### Rule 6 — Back up before migrations
+
+For major application/database changes:
+
+```bash
+./scripts/backup-site.sh <site> --with-files --auto-copy
+```
+
+Verify that the backup completed successfully before proceeding.
+
+### Rule 7 — Do not manually edit generated `production.yaml`
+
+Change the environment/configuration inputs and regenerate it:
+
+```bash
+./scripts/deploy.sh --regenerate
+```
+
+### Rule 8 — Do not run raw SQL cleanup scripts during a major-version migration
+
+Database maintenance scripts that depend on internal Frappe table names must be reviewed for the target Frappe version before use.
+
+## 22. Standard release checklist
+
+### Local
+
+- [ ] Working tree clean or intentionally modified
+- [ ] Correct application versions pinned in `apps.json`
+- [ ] Build uses `docker buildx`
+- [ ] Build uses `--secret id=apps_json`
+- [ ] Image builds successfully
+- [ ] `bench version` verified
+- [ ] Python/runtime verified
+- [ ] Local application smoke test passed
+- [ ] Changes committed
+
+### Staging
+
+- [ ] Immutable image pushed
+- [ ] Registry digest recorded
+- [ ] Staging uses the candidate image
+- [ ] Backup taken before migration
+- [ ] `bench migrate` completed
+- [ ] Login verified
+- [ ] Critical ERP workflows tested
+- [ ] HRMS tested where applicable
+- [ ] India Compliance tested where applicable
+- [ ] UAT approved
+
+### Production
+
+- [ ] Staging/UAT approved
+- [ ] Same immutable image tag selected
+- [ ] Same registry digest verified
+- [ ] Production backup completed
+- [ ] Maintenance window confirmed
+- [ ] `production.yaml` regenerated
+- [ ] Containers updated
+- [ ] `bench version` verified
+- [ ] Site migrations completed
+- [ ] Critical workflows verified
+- [ ] Logs checked
+- [ ] Previous image retained for rollback
+
+## 23. Repository references
+
+Related repository documentation:
+
+- [Production README](README.md)
+- [Operations Runbook](operations-runbook.md)
+- [ERPNext v16 Upgrade Plan](erpnext-v16-upgrade-plan.md)
+- [Pre-update Safety Checklist](pre-update-safety-checklist.md)
+
+The image build source is:
+
+```text
+images/layered/Containerfile
+```
+
+The application manifest is:
+
+```text
+production/apps.json
+```
+
+For temporary version testing, use a separate manifest such as:
+
+```text
+production/apps.v16-test.json
 ```
 
 ---
 
-## Summary
+**Pattern:** Layered custom image with immutable promotion
 
-### Key Takeaways
+**Build mechanism:** Docker BuildKit secret for `apps.json`
 
-1. **Pin versions** in `apps.json` for true immutability
-2. **Build once, deploy many** - assets pre-compiled
-3. **Tag with date+sha** for traceability
-4. **Push to registry** for reliable distribution
-5. **Use specific tags** in production (not `latest`)
-6. **Keep old images** for rollback capability
-7. **Test in staging** before production
-8. **Automate via CI/CD** for consistency
-
-### Workflow Checklist
-
-- [ ] Update `apps.json` with pinned versions
-- [ ] Build image with unique tag
-- [ ] Push both specific and latest tags
-- [ ] Test in staging environment
-- [ ] Update `CUSTOM_TAG` in production.env
-- [ ] Regenerate production.yaml
-- [ ] Deploy to production
-- [ ] Migrate sites
-- [ ] Monitor and verify
-- [ ] Document in changelog
-
-### Next Steps
-
-- Set up CI/CD pipeline for automated builds
-- Implement staging environment for testing
-- Configure monitoring and alerts
-- Document rollback procedures
-- Train team on workflow
-
----
-
-## Additional Resources
-
-- [Main Production README](../README.md)
-- [Asset Management Patterns](asset-management-frappe.md)
-- [Frappe Docker Documentation](https://github.com/frappe/frappe_docker)
-- [Docker Best Practices](https://docs.docker.com/develop/dev-best-practices/)
-
----
-
-**Last Updated**: November 2025  
-**Maintainer**: This repository  
-**Pattern**: Pattern 2 (Gold Standard - Immutable Images)
+**Promotion model:** Build locally → staging/UAT → same artifact → production
