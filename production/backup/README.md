@@ -21,7 +21,7 @@ chmod 600 backup.env
 **Edit `backup/backup.env`:**
 ```bash
 ENV_PREFIX=production              # Change from 'development'
-BACKUP_SITES=your-domain.com       # Change from 'erp.localhost'
+BACKUP_SITES=your-domain.com       # Set this to the site for the environment
 S3_BACKUP_RETENTION_DAYS=30        # Increase from 5
 S3_ACCESS_KEY_ID=your-key
 S3_SECRET_ACCESS_KEY=your-secret
@@ -127,7 +127,8 @@ scheduler:
 ```
 s3://erp-is-backup/
 ├── production/              ← ENV_PREFIX=production
-│   └── erp.example.com/
+│   ├── production-site/
+│   ├── staging-site/
 │       └── 2025-11-20/      ← Single date folder
 │           ├── 20251120_120000-database.sql.gz
 │           ├── 20251120_120000-files.tar
@@ -172,7 +173,7 @@ BACKUP_WITH_FILES=1              # 1=DB+files, 0=DB only
 BACKUP_COMPRESS=1                # Compress SQL (recommended)
 
 # Sites
-BACKUP_SITES=erp.localhost
+BACKUP_SITES=your-domain.com
 
 # Retention
 BACKUP_RETENTION_DAYS=7          # Local retention
@@ -232,11 +233,12 @@ S3_BACKUP_RETENTION_DAYS=90
 # ofelia.job-exec.backup-db.schedule: "@every 2h"
 ```
 
-### Staging/Dev
+### Staging
 ```bash
 ENV_PREFIX=staging
 BACKUP_WITH_FILES=0              # DB only
 S3_BACKUP_RETENTION_DAYS=14
+BACKUP_SITES=staging.example.com
 
 # In compose.backup-s3.yaml:
 # ofelia.job-exec.backup-daily.schedule: "0 3 * * *"
@@ -249,31 +251,31 @@ S3_BACKUP_RETENTION_DAYS=14
 ### Download from S3
 ```bash
 # List backups
-aws s3 ls s3://erp-is-backup/production/erp.localhost/ --recursive \
+aws s3 ls s3://erp-is-backup/production/your-domain.com/ --recursive \
     --endpoint-url=https://blr1.digitaloceanspaces.com
 
 # Download specific backup
-aws s3 cp s3://erp-is-backup/production/erp.localhost/2025-11-20/backup.sql.gz . \
+aws s3 cp s3://erp-is-backup/production/your-domain.com/2025-11-20/backup.sql.gz . \
     --endpoint-url=https://blr1.digitaloceanspaces.com
 ```
 
 ### Restore Database
 ```bash
 # Copy to container
-docker cp backup.sql.gz erpnext-production-backend:/tmp/
+docker cp backup.sql.gz erpnext-production-backend-1:/tmp/
 
 # Restore
 docker compose -p erpnext-production exec backend \
-    bench --site erp.localhost --force restore /tmp/backup.sql.gz
+    bench --site your-domain.com restore /tmp/backup.sql.gz --force
 ```
 
 ### Restore with Files
 ```bash
 docker compose -p erpnext-production exec backend \
-    bench --site erp.localhost --force restore \
+    bench --site your-domain.com restore \
     --with-public-files /tmp/files.tar \
     --with-private-files /tmp/private-files.tar \
-    /tmp/backup.sql.gz
+    /tmp/backup.sql.gz --force
 ```
 
 ---

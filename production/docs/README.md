@@ -36,6 +36,7 @@ erp-is/
 │   │   ├── validate-env.sh        # Config validation
 │   │   ├── logs.sh                # Log viewer
 │   │   └── stop.sh                # Stop services
+│   │   └── README.md              # Public deployment documentation
 │   └── production.yaml     # Generated compose file (do not edit)
 ├── overrides/              # Upstream compose overlays
 ├── docs/                   # Upstream documentation
@@ -112,6 +113,9 @@ htpasswd -nB admin       # Traefik dashboard password
 # 6. View logs
 ./scripts/logs.sh           # Interactive service selection
 ```
+
+For existing sites and the staging workflow, use the private
+environment-specific operations runbook stored in the local ignored docs.
 
 **First time?** Follow the complete checklist below.
 
@@ -405,7 +409,7 @@ nano production/production.env
 
 Required values:
 ```env
-SITES=erp.example.com                           # Your domain
+SITES=erp.example.com                                    # Your domain
 ERPNEXT_VERSION=v15.88.1                        # ERPNext version
 FRAPPE_VERSION=v15.88.1                         # Frappe version
 DB_HOST=mariadb-database                        # Database host
@@ -787,7 +791,7 @@ BACKUP_PASSPHRASE='your-secret' ./scripts/backup-site.sh erp.example.com \
 - **Cleanup**: `--cleanup-old` accepts `N` (days), `keep:N` (runs), or `latest` to prune aggressively
 - **Validation**: Automatic backup verification and size reporting
 
-Backups are stored in: `sites/erp.example.com/private/backups/` (container) or `./backups/` (host)
+Backups are stored in: `sites/<site-name>/private/backups/` (container) or `./backups/` (host)
 
 ### View Logs
 
@@ -962,11 +966,11 @@ docker compose -f production/production.yaml exec backend bench version
 
 **New sites**:
 ```bash
-./scripts/create-site.sh new.example.com
+./scripts/create-site.sh staging.example.com
 docker compose -f production/production.yaml exec backend \
-  bench --site new.example.com install-app india_compliance
+  bench --site staging.example.com install-app india_compliance
 docker compose -f production/production.yaml exec backend \
-  bench --site new.example.com migrate
+  bench --site staging.example.com migrate
 ```
 
 **Existing sites**
@@ -1115,6 +1119,11 @@ docker compose -f production/production.yaml exec backend \
 
 ## Maintenance Playbook
 
+For the real environment names, HRMS installation procedure, app lifecycle,
+backup/restore, reinstall, and maintenance commands, use the dedicated
+[Environment Operations Runbook](operations-runbook.md). It is the canonical
+reference for local, staging, and production environments.
+
 ### Daily / Continuous
 
 - `./scripts/logs.sh --tail` – scan for traceback spikes in backend/worker containers.
@@ -1124,7 +1133,7 @@ docker compose -f production/production.yaml exec backend \
 
 ### Weekly
 
-- Validate backups: `ls -lh backups/$(date +%Y-*)` and run a dry-run restore in staging (`bench --site staging.local restore ...`).
+- Validate backups: `ls -lh backups/$(date +%Y-*)` and run a dry-run restore in staging (`bench --site staging.example.com restore ...`).
 - Apply OS security patches (`sudo unattended-upgrade` or manual `apt update && apt upgrade`).
 - Review pending PRs from upstream frappe_docker—if a fix matters to you, merge it into `dev` early.
 
@@ -1132,7 +1141,7 @@ docker compose -f production/production.yaml exec backend \
 
 - Pick a low-traffic window, announce downtime, and tag the commit you plan to deploy.
 - Create a staging bench (optional but recommended) and run `./scripts/deploy.sh --regenerate` + `./scripts/deploy.sh` against it.
-- Execute automated checks: `bench --site staging.local migrate`, `bench --site staging.local build`, and any Cypress/API smoke tests you maintain.
+- Execute automated checks: `bench --site staging.example.com migrate`, `bench --site staging.example.com build`, and any Cypress/API smoke tests you maintain.
 - Freeze the container tags (`CUSTOM_TAG`, `ERPNEXT_VERSION`, `FRAPPE_VERSION`) before moving to production.
 
 ### Scheduled maintenance workflow
