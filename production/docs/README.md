@@ -254,7 +254,8 @@ These files contain environment-specific configuration and secrets and must not 
 Important values include:
 
 ```env
-SITES=erp.example.com
+SITES='`erp.example.com`'
+SITES_RULE='Host(`erp.example.com`)'
 ROUTER=erpnext-production
 BENCH_NETWORK=erpnext-production
 
@@ -276,6 +277,26 @@ production-latest
 ```
 
 as the production release identity.
+
+### Shell-safe site routing values
+
+When `production.env` is sourced by Bash, values containing backticks must be quoted.
+
+Use:
+
+```env
+SITES='`erp.example.com`'
+SITES_RULE='Host(`erp.example.com`)'
+```
+
+Do not leave either value unquoted. An unquoted `SITES_RULE` can be interpreted by the shell as command substitution/syntax rather than as a literal environment value.
+
+Before deployment, verify the file is sourceable:
+
+```bash
+bash -c 'set -e; source production/production.env; printf "SITES=%s\nSITES_RULE=%s\nCUSTOM_TAG=%s\n" "$SITES" "$SITES_RULE" "$CUSTOM_TAG"'
+```
+
 
 ### Database environment
 
@@ -315,31 +336,27 @@ Do not proceed if validation fails.
 
 ### Production
 
-The standard deployment command is:
+For a production deployment, regenerate the complete Compose configuration and then deploy:
 
 ```bash
+./scripts/deploy.sh --regenerate
 ./scripts/deploy.sh
 ```
 
-This:
-
-1. validates the environment
-2. starts Traefik
-3. starts MariaDB
-4. generates `production.yaml`
-5. starts the ERPNext application project
+For a normal production release, inspect the generated image reference before containers are updated.
 
 ### Staging on the same host
 
-When staging uses the host's already-running Traefik and MariaDB:
+When staging uses the host's already-running shared Traefik and MariaDB:
 
 ```bash
+./scripts/deploy.sh --regenerate
 ./scripts/deploy.sh --skip-infra
 ```
 
-This deploys only the ERPNext application project.
+`--skip-infra` is important on the current host because staging and production share the MariaDB and Traefik infrastructure.
 
-Do not stop the shared infrastructure merely to restart staging.
+Do not stop or recreate shared infrastructure merely to deploy the staging application project.
 
 ## 9. Generated Compose Configuration
 
@@ -365,11 +382,21 @@ Regenerate after changing environment or Compose inputs:
 ./scripts/deploy.sh --regenerate
 ```
 
-Inspect generated image references before a release:
+The generated file is the source of truth for the actual deployment configuration. It assembles the base Compose file with the required Redis, multi-bench, SSL/Traefik, environment, networking, and site-routing inputs.
+
+Inspect at least the image, router/rule, Redis settings, and site/network values before a release:
 
 ```bash
-grep -n 'image:' production/production.yaml
+grep -nE 'image:|traefik.http.routers|REDIS_|SITES' production/production.yaml
 ```
+
+A plain:
+
+```bash
+docker compose --env-file production.env config
+```
+
+is not a substitute for `deploy.sh --regenerate` in this repository because it does not necessarily include the full override set used by the deployment.
 
 Do not edit `production.yaml` manually.
 
@@ -384,6 +411,8 @@ Create a site using:
 The script creates the site and installs ERPNext.
 
 Applications such as HRMS and India Compliance are installed separately at the site level when required.
+
+An application being present in the Docker image does not mean it is installed in an existing site's database. Always verify an existing site's application set with `bench --site <site> list-apps` before installing anything during an upgrade.
 
 Example:
 
@@ -504,7 +533,13 @@ Run:
 
 The validation checks environment files, required variables, placeholders, password configuration, and related consistency checks.
 
-Run it before deployments and after configuration changes.
+Also verify Bash sourceability when `SITES`, `SITES_RULE`, or related routing values change:
+
+```bash
+bash -c 'set -e; source production/production.env; printf "SITES=%s\nSITES_RULE=%s\nCUSTOM_TAG=%s\n" "$SITES" "$SITES_RULE" "$CUSTOM_TAG"'
+```
+
+Run these checks before deployments and after configuration changes.
 
 ## 15. Application Updates
 
@@ -807,6 +842,24 @@ docker compose \
 ./scripts/validate-env.sh
 ```
 
+## Current v16 Release Candidate
+
+The current verified v16 candidate is:
+
+```text
+ghcr.io/duthink/erpnext-custom:v16.34.2-rc1
+```
+
+Registry digest:
+
+```text
+sha256:ea77737ba7497ae8a867dff307b72e16e5cab89f24ccac99aef8676dfa046577
+```
+
+The v15 production application manifest remains in `production/apps.json` until staging/UAT approval. The temporary v16 manifest is `production/apps.v16-test.json`.
+
+The v16 rollout is a database migration as well as an application-image update. See [`erpnext-v16-upgrade-plan.md`](erpnext-v16-upgrade-plan.md) for the migration sequence and rollback model.
+
 ## 24. Production Release Checklist
 
 Before deployment:
@@ -826,7 +879,9 @@ Before deployment:
 - [ ] Production backup completed
 - [ ] Docker compatibility check passed
 - [ ] Production `CUSTOM_TAG` points to the approved image
+- [ ] `SITES` and `SITES_RULE` are shell-safe and correct
 - [ ] Generated `production.yaml` reviewed
+- [ ] Production site installed-app set verified
 - [ ] Production migration completed
 - [ ] Critical workflows verified
 - [ ] Logs reviewed

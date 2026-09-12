@@ -124,7 +124,7 @@ python3 -m json.tool production/apps.json
 
 ## 4. Current verified v16 stack
 
-The current locally verified v16 application set is:
+The current verified v16 image application set is:
 
 | Component | Version |
 |---|---:|
@@ -140,6 +140,8 @@ The custom image is built with:
 FRAPPE_BRANCH=version-16
 ```
 
+For production promotion, record the exact application image tag and registry digest. The moving `version-16` base reference is a build dependency, not the production artifact identity.
+
 which currently resolves through:
 
 ```text
@@ -147,13 +149,19 @@ frappe/build:version-16
 frappe/base:version-16
 ```
 
-For the current verified build, the local image was:
+For the current verified v16 candidate:
 
 ```text
-ghcr.io/duthink/erpnext-custom:v16-test-v3.2.2
+ghcr.io/duthink/erpnext-custom:v16.34.2-rc1
 ```
 
-with local image ID:
+Registry digest:
+
+```text
+sha256:ea77737ba7497ae8a867dff307b72e16e5cab89f24ccac99aef8676dfa046577
+```
+
+The local build that produced this candidate had image ID:
 
 ```text
 sha256:25506deba681e66f9356b927a8a0450baa88725d2b2e41fab3614f5a3deab559
@@ -288,7 +296,17 @@ echo "Image: $IMAGE_TAG"
 
 The Git commit should represent the exact repository state used to build the image.
 
-Do not use `production-latest` as the production version identifier.
+For a release candidate, prefer a semantic/traceable release tag such as:
+
+```text
+v16.34.2-rc1
+```
+
+or another uniquely traceable immutable tag.
+
+Record both the Git commit and the registry digest in the release record.
+
+Do not use `production-latest`, `staging-latest`, or `latest` as the production version identifier.
 
 ## 9. Build the staging candidate
 
@@ -316,29 +334,72 @@ Do not push an image that has not passed the local verification.
 
 ## 10. Push the candidate image
 
-Log in to GHCR using credentials appropriate for your environment:
+Log in to GHCR using credentials appropriate for the environment:
 
 ```bash
-echo "$GITHUB_TOKEN" | \
-  docker login ghcr.io \
-  -u duthink \
-  --password-stdin
+echo "$GITHUB_TOKEN" |   docker login ghcr.io   -u duthink   --password-stdin
 ```
 
-Push the immutable tag:
+Then push the immutable tag:
 
 ```bash
 docker push "$IMAGE_TAG"
 ```
 
-Then retrieve the registry digest:
+Verify the remote registry digest:
 
 ```bash
-docker inspect "$IMAGE_TAG" \
-  --format '{{json .RepoDigests}}'
+docker buildx imagetools inspect "$IMAGE_TAG"
 ```
 
-The registry digest is the preferred identity for verifying that staging and production use the same image artifact.
+Record the digest in the release record.
+
+### GHCR credential-helper fallback
+
+The host may have Docker configured with the `pass` credential store:
+
+```json
+{
+  "credsStore": "pass"
+}
+```
+
+If Docker reports an OpenPGP/GPG credential decryption error even though `pass show` can read the stored entry, treat this as a **Docker → docker-credential-pass → GPG/OpenPGP** authentication-helper problem, not an image-build or GHCR problem.
+
+Use an isolated temporary Docker configuration for the GHCR push rather than changing the system-wide GPG/pass setup:
+
+```bash
+mkdir -p ~/.docker/ghcr-push
+
+cat > ~/.docker/ghcr-push/config.json <<'EOF'
+{
+  "auths": {
+    "ghcr.io": {}
+  }
+}
+EOF
+
+export DOCKER_CONFIG="$HOME/.docker/ghcr-push"
+
+docker login ghcr.io -u duthink
+docker push "$IMAGE_TAG"
+docker buildx imagetools inspect "$IMAGE_TAG"
+```
+
+Docker may warn that credentials are stored in the temporary configuration without a credential helper. This is acceptable only for the short-lived publishing operation.
+
+Clean up immediately after the digest has been verified:
+
+```bash
+rm -rf ~/.docker/ghcr-push
+unset DOCKER_CONFIG
+```
+
+Do **not** disable or replace the host's system-wide GPG/pass credential configuration merely to work around this deployment issue.
+
+See the separate incident record for the original diagnosis and resolution:
+
+[`GHCR Docker Authentication – OpenPGP Issue and Resolution.md`](GHCR%20Docker%20Authentication%20%E2%80%93%20OpenPGP%20Issue%20and%20Resolution.md)
 
 ## 11. Staging deployment
 
@@ -347,11 +408,13 @@ The image tag is selected in the staging environment configuration.
 The staging deployment should:
 
 ```text
-1. Pull the immutable candidate image
-2. Start the staging Compose project
-3. Run database migration if required
-4. Verify application versions
-5. Perform UAT
+1. Select the immutable candidate image
+2. Regenerate the complete Compose configuration
+3. Start only the staging application project when shared infra is already running
+4. Run database migration if required
+5. Verify image versions and installed site applications
+6. Perform technical smoke tests
+7. Perform authenticated UAT
 ```
 
 Staging and production are separate Compose projects and separate site/data volumes.
@@ -361,6 +424,8 @@ Do not copy staging environment files, site volumes, generated Compose files, or
 ## 12. Activate applications on a site
 
 Putting an application into the image does not automatically install it into every site's database.
+
+Always compare `bench --site <site> list-apps` with the intended site application set before installing an application during an upgrade.
 
 For an existing site:
 
@@ -420,19 +485,25 @@ CUSTOM_TAG=<approved-immutable-tag>
 PULL_POLICY=always
 ```
 
-Then regenerate the generated Compose file:
+Then regenerate the complete generated Compose file:
 
 ```bash
 ./scripts/deploy.sh --regenerate
 ```
 
-Inspect the generated image references before deploying:
+Inspect the generated configuration before deploying:
 
 ```bash
-grep -n 'image:' production/production.yaml
+grep -nE 'image:|traefik.http.routers|REDIS_|SITES' production/production.yaml
 ```
 
-Then deploy:
+On a host where shared MariaDB/Traefik infrastructure is already running and must not be disturbed, use:
+
+```bash
+./scripts/deploy.sh --skip-infra
+```
+
+For a standalone production host where this project owns the infrastructure, use the normal deploy command:
 
 ```bash
 ./scripts/deploy.sh
@@ -798,12 +869,28 @@ Change the environment/configuration inputs and regenerate it:
 
 Database maintenance scripts that depend on internal Frappe table names must be reviewed for the target Frappe version before use.
 
+### Rule 9 — Record the exact artifact
+
+For each promoted image, retain:
+
+```text
+repository commit
+image tag
+registry digest
+bench version
+Python/runtime version
+application manifest version
+```
+
+The image tag is convenient for deployment; the registry digest is the authoritative immutable identity.
+
 ## 22. Standard release checklist
 
 ### Local
 
 - [ ] Working tree clean or intentionally modified
 - [ ] Correct application versions pinned in `apps.json`
+- [ ] Production/staging manifest choice is intentional
 - [ ] Build uses `docker buildx`
 - [ ] Build uses `--secret id=apps_json`
 - [ ] Image builds successfully

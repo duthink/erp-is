@@ -216,29 +216,86 @@ validate_image_configuration() {
 }
 
 # ---------------------------------------------------------------------------
-# Validate SITES
+# Validate site/routing configuration
 # ---------------------------------------------------------------------------
 
 validate_sites() {
     local sites
+    local sites_rule
     sites="$(get_env_value "production.env" "SITES")"
+    sites_rule="$(get_env_value "production.env" "SITES_RULE")"
 
     if [[ -z "$sites" ]]; then
         echo_error "SITES is empty"
         return 1
     fi
 
-    # Accept both:
-    #   SITES=`erp.example.com`
+    if [[ -z "$sites_rule" ]]; then
+        echo_error "SITES_RULE is empty"
+        return 1
+    fi
+
+    # Require the shell-safe form used by this repository:
     #   SITES='`erp.example.com`'
-    if [[ "$sites" =~ ^\`.*\`$ ]] ||
-       [[ "$sites" =~ ^\'\`.*\`\'$ ]]; then
-        echo_info "SITES format looks correct"
+    #   SITES_RULE='Host(`erp.example.com`)'
+    #
+    # Backticks must remain inside single quotes because production.env is
+    # sourced by Bash during deployment.
+    if [[ "$sites" =~ ^\'\`[^\'\`]+\`\'$ ]]; then
+        echo_info "SITES format is shell-safe"
     else
-        echo_warn "SITES should normally contain a backtick-wrapped site list"
+        echo_error "SITES must use the shell-safe quoted backtick format"
         echo "  Example: SITES='\\`erp.example.com\\`'"
     fi
 
+    if [[ "$sites_rule" =~ ^\'Host\(\\\`[^\\\`]+\`\\\)\'$ ]]; then
+        echo_info "SITES_RULE format is shell-safe"
+    else
+        echo_error "SITES_RULE must use the shell-safe quoted Traefik Host() format"
+        echo "  Example: SITES_RULE='Host(\\`erp.example.com\\`)'"
+    fi
+
+    return 0
+}
+
+validate_env_sourceability() {
+    local env_file="production.env"
+    local output
+
+    echo "Checking Bash sourceability of $env_file..."
+
+    if [[ ! -f "$env_file" ]]; then
+        echo_error "$env_file not found; cannot test sourceability"
+        return 1
+    fi
+
+    # Parse first, then source in an isolated Bash process. This catches
+    # syntax problems caused by values such as unquoted backticks while
+    # keeping the parent validation shell untouched.
+    if ! bash -n "$env_file"; then
+        echo_error "$env_file contains Bash syntax errors"
+        return 1
+    fi
+
+    output="$(
+        bash -c '
+            set -euo pipefail
+            source "$1"
+            printf "SITES=%s\nSITES_RULE=%s\nCUSTOM_TAG=%s\n" \
+                "${SITES-}" "${SITES_RULE-}" "${CUSTOM_TAG-}"
+        ' bash "$env_file" 2>&1
+    )" || {
+        echo_error "$env_file could not be safely sourced by Bash"
+        echo "$output" | sed 's/^/    /'
+        return 1
+    }
+
+    if [[ -z "$output" ]]; then
+        echo_error "$env_file source test returned no configuration values"
+        return 1
+    fi
+
+    echo_info "$env_file is Bash-sourceable"
     return 0
 }
 
@@ -300,7 +357,8 @@ Checks:
   - Weak/default passwords
   - Password length
   - Email format
-  - SITES format
+  - SITES and SITES_RULE format
+  - Bash sourceability of production.env
   - Custom image configuration
   - Mutable image tag warnings
   - Traefik configuration
@@ -354,6 +412,7 @@ EOF
         fi
 
         validate_sites || true
+        validate_env_sourceability || true
 
         if [[ -n "$db_password" ]]; then
             validate_password_strength "$db_password" || true
@@ -451,8 +510,8 @@ EOF
         echo -e "${GREEN}✅ Validation Passed${NC}"
         echo "   No errors or warnings found."
         echo ""
-        echo "You can now proceed with deployment:"
-        echo "  ./scripts/deploy.sh"
+        echo "You can now regenerate and review the deployment configuration:"
+        echo "  ./scripts/deploy.sh --regenerate"
         exit 0
     fi
 }

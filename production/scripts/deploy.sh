@@ -40,13 +40,8 @@ cd "$PRODUCTION_DIR" || exit 1
 MODE="deploy"
 SKIP_INFRA="false"
 
-# Load environment
-if [[ -f "production.env" ]]; then
-    # shellcheck disable=SC1091
-    source production.env
-fi
-
-COMPOSE_PROJECT_NAME="${ROUTER:-erpnext-production}"
+# production.env is sourced only after validate-env.sh has confirmed it is
+# present and safe to parse/source.
 
 # Parse arguments
 case "${1:-}" in
@@ -152,7 +147,6 @@ docker compose version >/dev/null 2>&1 || {
 }
 
 echo_info "ERPNext Deployment"
-echo_info "Compose Project: $COMPOSE_PROJECT_NAME"
 
 # ---------------------------------------------------------------------------
 # Required environment files
@@ -167,8 +161,12 @@ for file in production.env traefik.env mariadb.env; do
 done
 
 # ---------------------------------------------------------------------------
-# Validate configuration
+# Validate configuration BEFORE sourcing production.env
 # ---------------------------------------------------------------------------
+#
+# production.env is shell-sourced by this script. Validate it first so a
+# malformed value such as an unquoted backtick in SITES or SITES_RULE is
+# reported by validate-env.sh instead of causing an early shell parse error.
 
 echo_info "Validating configuration..."
 
@@ -176,6 +174,12 @@ echo_info "Validating configuration..."
     echo_error "Environment validation failed."
     exit 1
 }
+
+# The validator has confirmed that production.env is sourceable.
+# shellcheck disable=SC1091
+source production.env
+
+COMPOSE_PROJECT_NAME="${ROUTER:-erpnext-production}"
 
 # ---------------------------------------------------------------------------
 # Validate custom image configuration
@@ -359,6 +363,12 @@ generate_yaml
 
 echo_info "✓ production.yaml generated and validated."
 
+echo_info "Generated image reference:"
+grep -n 'image:' production.yaml || true
+
+echo_info "Generated site/router configuration:"
+grep -nE 'traefik.http.routers|Host\(' production.yaml || true
+
 STEP=$((STEP + 1))
 
 # ---------------------------------------------------------------------------
@@ -463,6 +473,7 @@ echo_info "Useful checks:"
 echo_info "  docker compose -f production.yaml ps"
 echo_info "  ./scripts/logs.sh"
 echo_info "  ./scripts/create-site.sh"
+echo_info "  ./scripts/deploy.sh --regenerate"
 
 echo ""
 echo_warn "Important:"
