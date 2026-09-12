@@ -222,6 +222,10 @@ validate_image_configuration() {
 validate_sites() {
     local sites
     local sites_rule
+    local backtick='`'
+    local quote="'"
+    local inner
+
     sites="$(get_env_value "production.env" "SITES")"
     sites_rule="$(get_env_value "production.env" "SITES_RULE")"
 
@@ -235,24 +239,45 @@ validate_sites() {
         return 1
     fi
 
-    # Require the shell-safe form used by this repository:
+    # Required shell-safe forms:
     #   SITES='`erp.example.com`'
     #   SITES_RULE='Host(`erp.example.com`)'
     #
-    # Backticks must remain inside single quotes because production.env is
-    # sourced by Bash during deployment.
-    if [[ "$sites" =~ ^\'\`[^\'\`]+\`\'$ ]]; then
-        echo_info "SITES format is shell-safe"
+    # Use literal string prefixes/suffixes. Do not put backticks directly
+    # into shell expressions where they could be interpreted as syntax.
+
+    local sites_prefix="${quote}${backtick}"
+    local sites_suffix="${backtick}${quote}"
+
+    if [[ "$sites" == "${sites_prefix}"*"${sites_suffix}" ]]; then
+        inner="${sites#"$sites_prefix"}"
+        inner="${inner%"$sites_suffix"}"
+
+        if [[ -n "$inner" ]]; then
+            echo_info "SITES format is shell-safe"
+        else
+            echo_error "SITES contains an empty site name"
+        fi
     else
         echo_error "SITES must use the shell-safe quoted backtick format"
-        echo "  Example: SITES='\\`erp.example.com\\`'"
+        echo_error "Expected a single-quoted, backtick-wrapped site name"
     fi
 
-    if [[ "$sites_rule" =~ ^\'Host\(\\\`[^\\\`]+\`\\\)\'$ ]]; then
-        echo_info "SITES_RULE format is shell-safe"
+    local rule_prefix="${quote}Host(${backtick}"
+    local rule_suffix="${backtick})${quote}"
+
+    if [[ "$sites_rule" == "${rule_prefix}"*"${rule_suffix}" ]]; then
+        inner="${sites_rule#"$rule_prefix"}"
+        inner="${inner%"$rule_suffix"}"
+
+        if [[ -n "$inner" ]]; then
+            echo_info "SITES_RULE format is shell-safe"
+        else
+            echo_error "SITES_RULE contains an empty site name"
+        fi
     else
         echo_error "SITES_RULE must use the shell-safe quoted Traefik Host() format"
-        echo "  Example: SITES_RULE='Host(\\`erp.example.com\\`)'"
+        echo_error "Expected a single-quoted Host() rule containing the site name"
     fi
 
     return 0
