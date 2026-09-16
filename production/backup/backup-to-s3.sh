@@ -71,21 +71,13 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check for AWS CLI, install if missing
+    # Check for AWS CLI
+    export PATH="$HOME/.local/bin:$PATH"
+
     if ! command -v aws &> /dev/null; then
-        log_info "AWS CLI not found. Installing..."
-        # Install AWS CLI
-        pip3 install --user --no-warn-script-location awscli > /tmp/aws-install.log 2>&1
-        export PATH="$HOME/.local/bin:$PATH"
-        
-        # Verify installation
-        if command -v aws &> /dev/null || [ -f "$HOME/.local/bin/aws" ]; then
-            log_info "AWS CLI installed successfully"
-        else
-            log_error "Failed to install AWS CLI"
-            log_debug "Install log: $(cat /tmp/aws-install.log)"
-            exit 1
-        fi
+        log_error "AWS CLI not found in ${HOME}/.local/bin"
+        log_error "Initialize the backup-tools volume with AWS CLI before running backups"
+        exit 1
     fi
     
     # Check required environment variables
@@ -284,37 +276,68 @@ cleanup_old_local_backups() {
 ###############################################################################
 cleanup_old_s3_backups() {
     local site="$1"
-    local cutoff_date=$(date -u -d "${S3_BACKUP_RETENTION_DAYS} days ago" +%s 2>/dev/null || date -u -v-${S3_BACKUP_RETENTION_DAYS}d +%s 2>/dev/null || echo "0")
-    
+    local cutoff_date
+
+    cutoff_date=$(
+        date -u -d "${S3_BACKUP_RETENTION_DAYS} days ago" +%Y-%m-%d 2>/dev/null ||
+        date -u -v-${S3_BACKUP_RETENTION_DAYS}d +%Y-%m-%d 2>/dev/null ||
+        echo ""
+    )
+
     log_info "Cleaning up old S3 backups for ${site} (keeping ${S3_BACKUP_RETENTION_DAYS} days)..."
-    
-    local deleted_count=0
+
+    if [[ -z "$cutoff_date" ]]; then
+        log_warn "Could not calculate S3 retention cutoff; skipping cleanup"
+        return 0
+    fi
+
+    local cutoff_timestamp
+    cutoff_timestamp=$(date -u -d "$cutoff_date" +%s 2>/dev/null || echo "0")
+
     local s3_prefix="s3://${S3_BUCKET_NAME}/${ENV_PREFIX}/${site}/"
-    
-    # List all objects and filter by date
+    local deleted_count=0
+
     while IFS= read -r line; do
-        local object_date=$(echo "$line" | awk '{print $1, $2}')
-        local object_key=$(echo "$line" | awk '{$1=$2=$3=""; print $0}' | sed 's/^[ \t]*//')
-        
-        if [[ -z "$object_key" ]]; then
-            continue
-        fi
-        
-        local object_timestamp=$(date -u -d "$object_date" +%s 2>/dev/null || date -u -j -f "%Y-%m-%d %H:%M:%S" "$object_date" +%s 2>/dev/null || echo "0")
-        
-        if [[ "$object_timestamp" -lt "$cutoff_date" ]]; then
-            if aws s3 rm "s3://${S3_BUCKET_NAME}/${object_key}" --endpoint-url="${S3_ENDPOINT_URL}" &>/dev/null; then
-                ((deleted_count++))
+        local object_date
+        local object_key
+        local object_timestamp
+
+        object_date=$(echo "$line" | awk '{print $1}')
+        object_key=$(echo "$line" | awk '{$1=$2=$3=""; print $0}' | sed 's/^[ \t]*//')
+
+        [[ -z "$object_key" ]] && continue
+
+        object_timestamp=$(
+            date -u -d "$object_date" +%s 2>/dev/null ||
+            date -u -j -f "%Y-%m-%d" "$object_date" +%s 2>/dev/null ||
+            echo "0"
+        )
+
+        if [[ "$object_timestamp" -lt "$cutoff_timestamp" ]]; then
+            if timeout 30 aws s3 rm \
+                "s3://${S3_BUCKET_NAME}/${object_key}" \
+                --endpoint-url="${S3_ENDPOINT_URL}" \
+                &>/dev/null; then
+                deleted_count=$((deleted_count + 1))
                 log_debug "Deleted old S3 backup: ${object_key}"
+            else
+                log_warn "Could not delete old S3 object: ${object_key}"
             fi
         fi
-    done < <(aws s3 ls "${s3_prefix}" --endpoint-url="${S3_ENDPOINT_URL}" --recursive 2>/dev/null || true)
-    
+
+    done < <(
+        timeout 30 aws s3 ls "$s3_prefix" \
+            --endpoint-url="${S3_ENDPOINT_URL}" \
+            --recursive 2>/dev/null || true
+    )
+
     if [[ $deleted_count -gt 0 ]]; then
         log_info "Deleted ${deleted_count} old S3 backup file(s)"
     else
         log_debug "No old S3 backups to delete"
     fi
+
+    return 0
 }
 
 ###############################################################################

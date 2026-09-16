@@ -1,0 +1,27 @@
+services:
+  backup-runner:
+    image: ${CUSTOM_IMAGE}:${CUSTOM_TAG}
+    user: frappe
+    working_dir: /home/frappe/frappe-bench
+    env_file:
+      - ./backup/backup.env
+    environment:
+      PATH: /home/frappe/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - backup-tools:/home/frappe/.local
+      - ./backup/backup-to-s3.sh:/usr/local/bin/backup-to-s3.sh:ro
+    networks:
+      - default
+      - mariadb-network
+
+volumes:
+  sites:
+    name: ${COMPOSE_PROJECT_NAME:-erpnext-production}_sites
+  backup-tools:
+    name: ${COMPOSE_PROJECT_NAME:-erpnext-production}_backup-tools
+
+networks:
+  mariadb-network:
+    external: true
+    name: mariadb-network

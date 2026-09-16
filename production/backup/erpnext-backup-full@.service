@@ -1,0 +1,9 @@
+[Unit]
+Description=ERPNext full backup (%i)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/erpnext-backup/%i.env
+ExecStart=/bin/bash -lc 'cd "$ERP_ROOT" && exec ./backup/run-backup.sh 1'

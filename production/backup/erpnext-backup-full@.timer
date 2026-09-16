@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily ERPNext full backup (%i)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+Unit=erpnext-backup-full@%i.service
+
+[Install]
+WantedBy=timers.target

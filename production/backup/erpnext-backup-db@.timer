@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly ERPNext database backup (%i)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=erpnext-backup-db@%i.service
+
+[Install]
+WantedBy=timers.target
