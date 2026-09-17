@@ -199,7 +199,7 @@ docker run --rm frappe/base:version-16 python --version
 For a temporary test manifest, use a separate file such as:
 
 ```text
-production/apps.v16-test.json
+production/apps.json
 ```
 
 Do not overwrite the production manifest merely to perform a test.
@@ -228,7 +228,7 @@ Build:
 ```bash
 docker buildx build \
   --load \
-  --secret id=apps_json,src=production/apps.v16-test.json \
+  --secret id=apps_json,src=production/apps.json \
   --build-arg=FRAPPE_IMAGE_PREFIX=frappe \
   --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
   --build-arg=FRAPPE_BRANCH=version-16 \
@@ -951,7 +951,7 @@ production/apps.json
 For temporary version testing, use a separate manifest such as:
 
 ```text
-production/apps.v16-test.json
+production/apps.json
 ```
 
 ---

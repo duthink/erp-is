@@ -218,7 +218,6 @@ erp-is/
 │   └── compose.traefik*.yaml
 └── production/
     ├── apps.json
-    ├── apps.v16-test.json
     ├── *.env.example
     ├── scripts/
     │   ├── deploy.sh
@@ -856,7 +855,7 @@ Registry digest:
 sha256:ea77737ba7497ae8a867dff307b72e16e5cab89f24ccac99aef8676dfa046577
 ```
 
-The v15 production application manifest remains in `production/apps.json` until staging/UAT approval. The temporary v16 manifest is `production/apps.v16-test.json`.
+The production application manifest in `production/apps.json` must match the exact application branches used by the approved release artifact.
 
 The v16 rollout is a database migration as well as an application-image update. See [`erpnext-v16-upgrade-plan.md`](erpnext-v16-upgrade-plan.md) for the migration sequence and rollback model.
 
@@ -895,7 +894,6 @@ Before deployment:
 | `mariadb.env` | Shared MariaDB configuration |
 | `traefik.env` | Traefik configuration |
 | `apps.json` | Production application manifest |
-| `apps.v16-test.json` | Temporary/reproducible v16 test manifest |
 | `scripts/deploy.sh` | Deployment and Compose generation |
 | `scripts/create-site.sh` | Site creation |
 | `scripts/backup-site.sh` | Site backups |
