@@ -10,7 +10,7 @@
 # Usage: /usr/local/bin/backup-to-s3.sh
 #
 # Environment Variables Required:
-#   S3_ENDPOINT_URL          - S3 endpoint (e.g., https://blr1.digitaloceanspaces.com)
+#   S3_ENDPOINT_URL - S3-compatible storage endpoint
 #   S3_BUCKET_NAME          - S3 bucket name
 #   AWS_ACCESS_KEY_ID       - S3 access key
 #   AWS_SECRET_ACCESS_KEY   - S3 secret key

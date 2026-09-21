@@ -4,6 +4,8 @@ Production deployment for ERPNext/Frappe using Docker Compose, Traefik, MariaDB,
 
 This directory contains the deployment configuration and operational scripts for the ERPNext environments.
 
+> **Public repository rule:** This README documents reusable deployment patterns. Live site names, server paths, environment names, storage locations, release digests, and other deployment-specific identifiers belong in private deployment documentation.
+
 ## 1. Architecture
 
 The deployment consists of separate Docker Compose projects:
@@ -86,11 +88,11 @@ Servers are deployment targets.
 
 The repository uses:
 
-| Branch | Purpose |
-|---|---|
-| `main` | Production-approved state |
-| `staging` | UAT/release-candidate state |
-| `dev` | Local feature and development work |
+| Branch    | Purpose                            |
+| --------- | ---------------------------------- |
+| `main`    | Production-approved state          |
+| `staging` | UAT/release-candidate state        |
+| `dev`     | Local feature and development work |
 
 The normal promotion is:
 
@@ -139,7 +141,7 @@ images/layered/Containerfile
         └── additional Frappe apps
         │
         ▼
-ghcr.io/duthink/erpnext-custom:<immutable-tag>
+<IMAGE_REGISTRY>/<IMAGE_NAME>:<immutable-tag>
 ```
 
 ### Important
@@ -164,42 +166,19 @@ For the complete image-build procedure, see:
 
 [`custom-image-workflow.md`](custom-image-workflow.md)
 
-## 4. Current Verified v16 Stack
+## 4. Verified v16 Example Stack
 
-The current locally verified v16 application stack is:
+A verified v16 application stack can be recorded as:
 
-| Component | Version |
-|---|---:|
-| Frappe Framework | 16.33.1 |
-| ERPNext | 16.34.2 |
-| HRMS | 16.18.1 |
-| India Compliance | 16.9.0 |
-| Python | 3.14.7 |
+| Component        | Version |
+| ---------------- | ------: |
+| Frappe Framework |    16.x |
+| ERPNext          |    16.x |
+| HRMS             |    16.x |
+| India Compliance |    16.x |
+| Python           |     3.x |
 
-The current verified v16 test image is:
-
-```text
-ghcr.io/duthink/erpnext-custom:v16-test-v3.2.2
-```
-
-Local image ID:
-
-```text
-sha256:25506deba681e66f9356b927a8a0450baa88725d2b2e41fab3614f5a3deab559
-```
-
-This image was successfully built after integrating `frappe_docker` v3.2.2 and verified with:
-
-```text
-erpnext 16.34.2
-frappe 16.33.1
-hrms 16.18.1
-india_compliance 16.9.0
-```
-
-The v15 → v16 migration is a major application/database upgrade. See:
-
-[`erpnext-v16-upgrade-plan.md`](erpnext-v16-upgrade-plan.md)
+For a specific deployment, record exact versions, image tag, and registry digest in the private release/deployment record.
 
 ## 5. Repository Structure
 
@@ -226,6 +205,15 @@ erp-is/
     │   ├── validate-env.sh
     │   ├── logs.sh
     │   └── stop.sh
+    ├── backup/
+    │   ├── backup-to-s3.sh
+    │   ├── compose.backup-runner.yaml
+    │   ├── run-backup.sh
+    │   ├── README.md
+    │   ├── erpnext-backup-db@.service
+    │   ├── erpnext-backup-db@.timer
+    │   ├── erpnext-backup-full@.service
+    │   └── erpnext-backup-full@.timer
     └── docs/
         ├── README.md
         ├── custom-image-workflow.md
@@ -253,15 +241,15 @@ These files contain environment-specific configuration and secrets and must not 
 Important values include:
 
 ```env
-SITES='`erp.example.com`'
-SITES_RULE='Host(`erp.example.com`)'
-ROUTER=erpnext-production
-BENCH_NETWORK=erpnext-production
+SITES='`<SITE>`'
+SITES_RULE='Host(`<SITE>`)'
+ROUTER=erpnext-<ENVIRONMENT>
+BENCH_NETWORK=erpnext-<ENVIRONMENT>
 
 DB_HOST=mariadb-database
 DB_PORT=3306
 
-CUSTOM_IMAGE=ghcr.io/duthink/erpnext-custom
+CUSTOM_IMAGE=<IMAGE_REGISTRY>/<IMAGE_NAME>
 CUSTOM_TAG=<immutable-image-tag>
 PULL_POLICY=always
 ```
@@ -284,8 +272,8 @@ When `production.env` is sourced by Bash, values containing backticks must be qu
 Use:
 
 ```env
-SITES='`erp.example.com`'
-SITES_RULE='Host(`erp.example.com`)'
+SITES='`<SITE>`'
+SITES_RULE='Host(`<SITE>`)'
 ```
 
 Do not leave either value unquoted. An unquoted `SITES_RULE` can be interpreted by the shell as command substitution/syntax rather than as a literal environment value.
@@ -295,7 +283,6 @@ Before deployment, verify the file is sourceable:
 ```bash
 bash -c 'set -e; source production/production.env; printf "SITES=%s\nSITES_RULE=%s\nCUSTOM_TAG=%s\n" "$SITES" "$SITES_RULE" "$CUSTOM_TAG"'
 ```
-
 
 ### Database environment
 
@@ -404,7 +391,7 @@ Do not edit `production.yaml` manually.
 Create a site using:
 
 ```bash
-./scripts/create-site.sh erp.example.com
+./scripts/create-site.sh <SITE>
 ```
 
 The script creates the site and installs ERPNext.
@@ -419,7 +406,7 @@ Example:
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com install-app hrms
+  bench --site <SITE> install-app hrms
 ```
 
 and:
@@ -428,7 +415,7 @@ and:
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com install-app india_compliance
+  bench --site <SITE> install-app india_compliance
 ```
 
 Then:
@@ -437,29 +424,24 @@ Then:
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com migrate
+  bench --site <SITE> migrate
 ```
 
 An application being present in the Docker image does not automatically activate it in an existing site's database.
 
 ## 11. Backups
 
-Backups are performed with:
+There are two backup paths.
+
+### Manual migration/recovery backup
+
+For a migration or an operator-triggered recovery point, use the site backup script:
 
 ```bash
-./scripts/backup-site.sh erp.example.com --with-files --auto-copy
+./scripts/backup-site.sh <SITE> --with-files --auto-copy
 ```
 
-For a migration, use a fresh backup immediately before the migration.
-
-The backup script supports:
-
-- database backups
-- public/private files
-- host copying
-- retention policies
-- optional encryption
-- verification
+For a major migration, create a fresh backup immediately before the migration.
 
 See:
 
@@ -469,7 +451,65 @@ See:
 
 Never commit database backups to Git.
 
-For major upgrades, the backup is the primary database rollback mechanism.
+For major upgrades, the pre-migration backup is the primary database rollback mechanism.
+
+### Automated production backups
+
+Automated production backups do **not** use the ERPNext scheduler and do **not** depend on a replaceable scheduler container.
+
+The current design is:
+
+```text
+systemd timer
+      ↓
+backup/run-backup.sh
+      ↓
+docker compose run --rm backup-runner
+      ↓
+same immutable ERPNext application image
+      ↓
+bench backup
+      ↓
+DigitalOcean Spaces
+```
+
+The backup runner uses the same ERPNext sites volume as the application stack and uploads the resulting backups to DigitalOcean Spaces.
+
+Production schedule:
+
+| Backup                      | Schedule           |
+| --------------------------- | ------------------ |
+| Database backup             | Hourly             |
+| Full backup including files | Daily at 03:00 UTC |
+
+The production systemd units are:
+
+```text
+erpnext-backup-db@<INSTANCE>.timer
+erpnext-backup-full@<INSTANCE>.timer
+```
+
+Staging currently has **no automated backup timers**.
+
+To run the backup manually from the ERP installation directory:
+
+Database-only backup:
+
+```bash
+./backup/run-backup.sh 0
+```
+
+Full backup including files:
+
+```bash
+./backup/run-backup.sh 1
+```
+
+The automated backup procedure and S3 layout are documented in:
+
+[`backup/README.md`](../backup/README.md)
+
+Do not disable or recreate production backup timers during staging maintenance. The systemd timers are host-wide, not scoped to the directory from which you are working.
 
 ## 12. Logs
 
@@ -547,7 +587,7 @@ For an application release:
 ```text
 local change
    ↓
-update apps.json
+prepare the approved application manifest
    ↓
 build immutable image
    ↓
@@ -638,7 +678,7 @@ See:
 Build the application image once:
 
 ```text
-ghcr.io/duthink/erpnext-custom:<immutable-tag>
+<IMAGE_REGISTRY>/<IMAGE_NAME>:<immutable-tag>
 ```
 
 After staging UAT, production must use the same image artifact.
@@ -649,7 +689,7 @@ Example:
 
 ```text
 image:
-ghcr.io/duthink/erpnext-custom:20260910-abc1234
+<IMAGE_REGISTRY>/<IMAGE_NAME>:20260910-abc1234
 
 digest:
 sha256:...
@@ -659,13 +699,13 @@ Do not rebuild from `main` after staging UAT and call the resulting image equiva
 
 ## 19. Applying a Release to an Existing Site
 
-For a normal application release:
+For a normal application release, create a fresh pre-release backup:
 
 ```bash
-./scripts/backup-site.sh erp.example.com --with-files --auto-copy
+./scripts/backup-site.sh <SITE> --with-files --auto-copy
 ```
 
-Then deploy the new immutable image.
+Then deploy the approved immutable image.
 
 After containers are healthy:
 
@@ -673,7 +713,7 @@ After containers are healthy:
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com migrate
+  bench --site <SITE> migrate
 ```
 
 Then:
@@ -682,7 +722,7 @@ Then:
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com clear-cache
+  bench --site <SITE> clear-cache
 ```
 
 Verify:
@@ -691,7 +731,7 @@ Verify:
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com list-apps
+  bench --site <SITE> list-apps
 ```
 
 Do not automatically run `bench build` in production when using the immutable layered image workflow.
@@ -785,6 +825,23 @@ and identify which Compose projects are running.
 
 Do not stop shared infrastructure during routine staging application deployments unless that is intentional.
 
+### Systemd timers are also host-wide
+
+The current host runs both staging and production application environments.
+
+The production backup timers:
+
+```text
+erpnext-backup-db@<INSTANCE>.timer
+erpnext-backup-full@<INSTANCE>.timer
+```
+
+are host-level systemd units. They remain production timers even when the shell is currently in the staging checkout.
+
+Staging has no automated backup timers.
+
+Do not disable `@production` backup timers while performing staging maintenance. Always confirm the target unit before enabling, disabling, starting, or stopping a systemd timer.
+
 ## 23. Common Commands
 
 ### Check running services
@@ -808,7 +865,7 @@ docker compose \
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com list-apps
+  bench --site <SITE> list-apps
 ```
 
 ### Clear cache
@@ -817,7 +874,7 @@ docker compose \
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com clear-cache
+  bench --site <SITE> clear-cache
 ```
 
 ### Migrate site
@@ -826,7 +883,7 @@ docker compose \
 docker compose \
   -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com migrate
+  bench --site <SITE> migrate
 ```
 
 ### Regenerate Compose
@@ -841,23 +898,18 @@ docker compose \
 ./scripts/validate-env.sh
 ```
 
-## Current v16 Release Candidate
+## Verified Release Record
 
-The current verified v16 candidate is:
+For a specific deployment, record the exact release artifact in the private deployment/release record.
 
-```text
-ghcr.io/duthink/erpnext-custom:v16.34.2-rc1
-```
-
-Registry digest:
+Example:
 
 ```text
-sha256:ea77737ba7497ae8a867dff307b72e16e5cab89f24ccac99aef8676dfa046577
+image: <IMAGE_REGISTRY>/<IMAGE_NAME>:<IMMUTABLE_TAG>
+digest: sha256:<REGISTRY_DIGEST>
 ```
 
-The production application manifest in `production/apps.json` must match the exact application branches used by the approved release artifact.
-
-The v16 rollout is a database migration as well as an application-image update. See [`erpnext-v16-upgrade-plan.md`](erpnext-v16-upgrade-plan.md) for the migration sequence and rollback model.
+Do not use the public README as the live production release register.
 
 ## 24. Production Release Checklist
 
@@ -883,28 +935,36 @@ Before deployment:
 - [ ] Production site installed-app set verified
 - [ ] Production migration completed
 - [ ] Critical workflows verified
+- [ ] HTTPS endpoint returns HTTP 200
+- [ ] Login and critical workflows verified
 - [ ] Logs reviewed
 - [ ] Previous image and backup retained
 
 ## 25. Files and Responsibilities
 
-| File | Responsibility |
-|---|---|
-| `production.env` | ERPNext environment configuration |
-| `mariadb.env` | Shared MariaDB configuration |
-| `traefik.env` | Traefik configuration |
-| `apps.json` | Production application manifest |
-| `scripts/deploy.sh` | Deployment and Compose generation |
-| `scripts/create-site.sh` | Site creation |
-| `scripts/backup-site.sh` | Site backups |
-| `scripts/validate-env.sh` | Configuration validation |
-| `scripts/logs.sh` | Application log viewing |
-| `scripts/stop.sh` | Application/infrastructure shutdown |
-| `scripts/check-docker-compat.sh` | Docker/Traefik compatibility check |
-| `docs/custom-image-workflow.md` | Custom image build/release procedure |
-| `docs/erpnext-v16-upgrade-plan.md` | v15 → v16 migration procedure |
-| `docs/operations-runbook.md` | Environment-specific operational runbook |
-| `docs/pre-update-safety-checklist.md` | OS/Docker update safety |
+| File                                  | Responsibility                                 |
+| ------------------------------------- | ---------------------------------------------- |
+| `production.env`                      | ERPNext environment configuration              |
+| `mariadb.env`                         | Shared MariaDB configuration                   |
+| `traefik.env`                         | Traefik configuration                          |
+| `apps.json`                           | Production application manifest                |
+| `scripts/deploy.sh`                   | Deployment and Compose generation              |
+| `scripts/create-site.sh`              | Site creation                                  |
+| `scripts/backup-site.sh`              | Site backups                                   |
+| `scripts/validate-env.sh`             | Configuration validation                       |
+| `scripts/logs.sh`                     | Application log viewing                        |
+| `scripts/stop.sh`                     | Application/infrastructure shutdown            |
+| `scripts/check-docker-compat.sh`      | Docker/Traefik compatibility check             |
+| `backup/backup-to-s3.sh`              | Backup creation and S3 upload                  |
+| `backup/compose.backup-runner.yaml`   | Backup runner Compose definition               |
+| `backup/run-backup.sh`                | Operator entry point for automated backup runs |
+| `backup/erpnext-backup-*.service`     | Systemd backup execution units                 |
+| `backup/erpnext-backup-*.timer`       | Systemd backup schedules                       |
+| `backup/README.md`                    | Automated backup architecture and operations   |
+| `docs/custom-image-workflow.md`       | Custom image build/release procedure           |
+| `docs/erpnext-v16-upgrade-plan.md`    | v15 → v16 migration procedure                  |
+| `docs/operations-runbook.md`          | Environment-specific operational runbook       |
+| `docs/pre-update-safety-checklist.md` | OS/Docker update safety                        |
 
 ## 26. Security
 
@@ -946,6 +1006,13 @@ Recommended:
 ./scripts/deploy.sh
 ```
 
+For automated backup runs, use the dedicated backup runner:
+
+```bash
+./backup/run-backup.sh 0
+./backup/run-backup.sh 1
+```
+
 Database maintenance scripts that directly manipulate internal Frappe tables should not be considered part of the standard v16 maintenance procedure unless they have been explicitly validated for the target Frappe release.
 
 ## 28. Documentation Map
@@ -964,6 +1031,10 @@ Use the document appropriate to the task:
 
 [`operations-runbook.md`](operations-runbook.md)
 
+### Automated backups
+
+[`../backup/README.md`](../backup/README.md)
+
 ### OS/Docker updates
 
 [`pre-update-safety-checklist.md`](pre-update-safety-checklist.md)
@@ -976,9 +1047,59 @@ Use the document appropriate to the task:
 - [HRMS](https://github.com/frappe/hrms)
 - [India Compliance](https://github.com/resilient-tech/india-compliance)
 
+## 30. HTTP 500 After Deployment
+
+A deployment can complete successfully and all containers can remain running while the site still returns HTTP 500.
+
+First inspect the application logs:
+
+```bash
+./scripts/logs.sh --tail 200
+```
+
+If the containers are healthy but the site returns HTTP 500, clear the site cache and restart the application services:
+
+```bash
+docker compose -f production/production.yaml \
+  exec backend \
+  bench --site <site> clear-cache
+
+docker compose -f production/production.yaml \
+  restart \
+  backend \
+  queue-short \
+  queue-long \
+  scheduler \
+  websocket \
+  frontend
+```
+
+Verify the site:
+
+```bash
+curl -sk -o /dev/null -w 'HTTP %{http_code}\n' \
+  https://<site>/login
+```
+
+Expected:
+
+```text
+HTTP 200
+```
+
+This cache-clear and application-restart sequence was used successfully after the v15 → v16 production rollout when the site returned HTTP 500 despite the containers being up. Treat it as a recovery procedure based on the observed incident, not as proof that every HTTP 500 has the same cause.
+
+If the problem is specifically missing or stale CSS/JS assets rather than an application HTTP 500, use:
+
+[`troubleshooting/css-js-404-after-custom-app.md`](../troubleshooting/css-js-404-after-custom-app.md)
+
+That troubleshooting procedure covers asset rebuild/synchronization and `bench clear-website-cache`.
+
+Do not assume that `docker compose ps` showing all containers as running means the application is healthy. Always verify the HTTP endpoint and, after a migration, test an actual login and critical workflow.
+
 ---
 
-**Repository:** `duthinker/erp-is`
+**Repository:** `duthink/erp-is`
 
 **Deployment model:** Docker Compose + Traefik + shared MariaDB + isolated staging/production application projects
 
@@ -986,6 +1107,6 @@ Use the document appropriate to the task:
 
 **Promotion model:** Local → GitHub staging → Staging/UAT → GitHub main → Production
 
-**Current verified v16 candidate:** Frappe 16.33.1 / ERPNext 16.34.2 / HRMS 16.18.1 / India Compliance 16.9.0
+**Current verified v16 release:** Frappe 16.33.1 / ERPNext 16.34.2 / HRMS 16.18.1 / India Compliance 16.9.0
 
-**Last updated:** September 2026
+**Last updated:** September 17, 2026

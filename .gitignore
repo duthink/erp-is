@@ -45,3 +45,6 @@ production/docs/pre-update-safety-checklist.md
 # VitePress
 **/.vitepress/dist
 **/.vitepress/cache
+
+# Private documentation
+*_private.md

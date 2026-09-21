@@ -2,16 +2,30 @@
 
 **Production workflow for ERPNext, HRMS, India Compliance, and other Frappe apps**
 
-This document defines the repository's standard workflow for building and promoting custom ERPNext Docker images.
+This document defines the repository's standard workflow for building, testing, publishing, and promoting custom ERPNext Docker images.
 
-The image is built from `images/layered/Containerfile` and contains the Frappe Framework plus the applications declared in an `apps.json` manifest. Application assets are built into the image so application containers use the same immutable artifact.
+The image is built from:
+
+```text
+images/layered/Containerfile
+```
+
+and contains the Frappe Framework plus the applications declared in the **approved build-time application manifest**.
+
+Application assets are built into the image so application containers use the same immutable artifact.
+
+> **Public repository rule:** This guide documents the reusable image-build and promotion method. Live site names, server paths, environment names, release digests, and deployment-specific infrastructure values belong in private deployment documentation.
+
+> **Important:** an application being present in the image does not mean it is installed in every site's database. Image contents and site-installed applications are separate concerns.
+
+---
 
 ## 1. Architecture
 
 The repository uses the **layered custom-image pattern**:
 
 ```text
-production/apps.json
+approved application manifest
         │
         │ BuildKit secret
         ▼
@@ -20,28 +34,37 @@ images/layered/Containerfile
         ├── frappe/build:version-16
         │
         ├── Frappe Framework
-        │
         ├── ERPNext
         ├── HRMS
-        └── other apps in apps.json
+        └── other approved Frappe apps
         │
         ▼
-ghcr.io/duthink/erpnext-custom:<immutable-tag>
+<IMAGE_REGISTRY>/<IMAGE_NAME>:<immutable-tag>
         │
         ├── Staging / UAT
         │
         └── Production
 ```
 
-The layered Containerfile consumes the `apps.json` file through a BuildKit secret:
+The layered `Containerfile` consumes the application manifest through a BuildKit secret:
 
 ```dockerfile
 RUN --mount=type=secret,id=apps_json,target=/opt/frappe/apps.json ...
 ```
 
-**Do not use `APPS_JSON_BASE64`.** The current build system intentionally uses a BuildKit secret instead.
+The secret is passed as:
 
-## 2. Important repository rules
+```text
+id=apps_json
+```
+
+The current build system intentionally uses this mechanism.
+
+**Do not use the older `APPS_JSON_BASE64` build-argument workflow.**
+
+---
+
+## 2. Repository and promotion rules
 
 ### Build locally
 
@@ -51,26 +74,40 @@ Image builds and Git operations are performed from the local development checkou
 LOCAL VS CODE
      │
      ├── edit code/manifests
+     ├── validate manifests
      ├── build image
      ├── test image
-     └── commit changes
+     ├── commit changes
+     └── push to GitHub
              │
              ▼
        GitHub / staging
 ```
 
-The staging and production servers are deployment targets. Do not perform merges, rebases, application development, or image-building changes there as part of the normal promotion workflow.
+The staging and production servers are deployment targets.
+
+Do not perform the following on staging or production as part of the normal release workflow:
+
+```text
+Git merge
+Git rebase
+conflict resolution
+application development
+custom image building
+```
 
 ### Build once, promote the same artifact
 
-For a release candidate:
+The release flow is:
 
 ```text
 local build
     ↓
 immutable registry tag
     ↓
-staging
+staging deployment
+    ↓
+database migration if required
     ↓
 UAT
     ↓
@@ -79,23 +116,33 @@ same image digest
 production
 ```
 
-Do not rebuild the application image from `main` after staging passes. Production should receive the same tested image artifact.
+Do **not** rebuild the application image from `main` after staging passes.
 
-## 3. What belongs in `apps.json`
+Production must receive the same tested image artifact that passed staging/UAT.
 
-Frappe Framework is **not** listed in `apps.json`.
+---
 
-The Framework is selected through:
+## 3. What belongs in the application manifest
+
+Frappe Framework is **not** listed in the application manifest.
+
+The Framework line is selected through:
 
 ```text
 FRAPPE_BRANCH
 ```
 
-passed to `images/layered/Containerfile`.
+passed to:
 
-`apps.json` contains ERPNext, HRMS, India Compliance, and other applications that should be baked into the image.
+```text
+images/layered/Containerfile
+```
 
-Example:
+The application manifest contains ERPNext, HRMS, India Compliance, and any other applications that should be baked into the image.
+
+### Current verified v16 application set
+
+The application versions used for the completed v16 production image were:
 
 ```json
 [
@@ -114,74 +161,120 @@ Example:
 ]
 ```
 
-For production images, prefer release tags or exact commits over moving branches.
-
-Validate the manifest before building:
-
-```bash
-python3 -m json.tool production/apps.json
-```
-
-## 4. Current verified v16 stack
-
-The current verified v16 image application set is:
-
-| Component | Version |
-|---|---:|
-| Frappe Framework | 16.33.1 |
-| ERPNext | 16.34.2 |
-| HRMS | 16.18.1 |
-| India Compliance | 16.9.0 |
-| Python | 3.14.7 |
-
-The custom image is built with:
+Frappe Framework:
 
 ```text
 FRAPPE_BRANCH=version-16
 ```
 
-For production promotion, record the exact application image tag and registry digest. The moving `version-16` base reference is a build dependency, not the production artifact identity.
+### Important manifest rule
 
-which currently resolves through:
+The application manifest used to build a release is a **build input**.
+
+Do not assume that today's checked-in `production/apps.json` is automatically the exact manifest that produced an already-deployed historical image.
+
+For the completed v16 rollout, the v16 build used an approved temporary manifest during image creation. That temporary file was later retired from the repository.
+
+For future releases:
+
+```text
+approved release manifest
+        ↓
+immutable image
+        ↓
+record tag + digest
+        ↓
+staging/UAT
+        ↓
+same artifact → production
+```
+
+Never reconstruct a production image from memory when the exact release artifact already exists in GHCR.
+
+### Validate JSON
+
+Before building:
+
+```bash
+python3 -m json.tool <approved-apps-manifest>
+```
+
+For production-grade releases, prefer release tags or exact commits over moving application branches.
+
+---
+
+## 4. Current verified v16 stack
+
+The current verified production image contains:
+
+| Component        | Version |
+| ---------------- | ------: |
+| Frappe Framework | 16.33.1 |
+| ERPNext          | 16.34.2 |
+| HRMS             | 16.18.1 |
+| India Compliance |  16.9.0 |
+| Python           |  3.14.7 |
+
+The custom image uses:
+
+```text
+FRAPPE_BRANCH=version-16
+```
+
+The base/build image family is:
 
 ```text
 frappe/build:version-16
 frappe/base:version-16
 ```
 
-For the current verified v16 candidate:
+For release identity, use the custom image tag plus registry digest.
+
+### Current deployed image
 
 ```text
-ghcr.io/duthink/erpnext-custom:v16.34.2-rc1
+<IMAGE_REGISTRY>/<IMAGE_NAME>:<IMMUTABLE_TAG>
 ```
 
 Registry digest:
 
 ```text
-sha256:ea77737ba7497ae8a867dff307b72e16e5cab89f24ccac99aef8676dfa046577
+sha256:<REGISTRY_DIGEST>
 ```
 
-The local build that produced this candidate had image ID:
+This exact image was promoted to production.
 
-```text
-sha256:25506deba681e66f9356b927a8a0450baa88725d2b2e41fab3614f5a3deab559
-```
+Do not treat a historical local Docker image ID as the release identity. The registry digest is the authoritative immutable artifact identity.
 
-The local image build and `bench version` check completed successfully.
+---
 
 ## 5. Prerequisites
 
-Verify Docker and Compose:
+Verify Docker:
 
 ```bash
 docker --version
+```
+
+Verify Compose:
+
+```bash
 docker compose version
+```
+
+Verify Buildx:
+
+```bash
 docker buildx version
 ```
 
-The layered build requires BuildKit secret support, so use `docker buildx build`.
+The layered build requires BuildKit secret support, so use:
 
-The required Frappe base images are:
+```bash
+docker buildx build
+```
+
+Pull the required Frappe base images:
 
 ```bash
 docker pull frappe/build:version-16
@@ -191,18 +284,30 @@ docker pull frappe/base:version-16
 Verify the runtime if required:
 
 ```bash
-docker run --rm frappe/base:version-16 python --version
+docker run --rm \
+  frappe/base:version-16 \
+  python --version
 ```
+
+Expected current runtime:
+
+```text
+Python 3.14.7
+```
+
+---
 
 ## 6. Build a local test image
 
-For a temporary test manifest, use a separate file such as:
+For experimental local testing, create a temporary application manifest separately from the release manifest whenever the test needs different application pins.
+
+Example temporary file:
 
 ```text
-production/apps.json
+/tmp/apps.v16-test.json
 ```
 
-Do not overwrite the production manifest merely to perform a test.
+Do not overwrite the production release manifest merely to perform an experiment.
 
 Example:
 
@@ -223,40 +328,54 @@ Example:
 ]
 ```
 
+Validate:
+
+```bash
+python3 -m json.tool /tmp/apps.v16-test.json
+```
+
 Build:
 
 ```bash
 docker buildx build \
   --load \
-  --secret id=apps_json,src=production/apps.json \
+  --secret id=apps_json,src=/tmp/apps.v16-test.json \
   --build-arg=FRAPPE_IMAGE_PREFIX=frappe \
   --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
   --build-arg=FRAPPE_BRANCH=version-16 \
-  --tag=ghcr.io/duthink/erpnext-custom:v16-test \
+  --tag=<IMAGE_REGISTRY>/<IMAGE_NAME>:v16-local-test \
   --file=images/layered/Containerfile \
   .
 ```
 
 ### Why `--load`?
 
-`--load` imports the resulting image into the local Docker image store so it can immediately be used with `docker run` or a local Compose test project.
+`--load` imports the resulting image into the local Docker image store so it can immediately be used with:
 
-## 7. Verify the image before deploying it
+```text
+docker run
+```
 
-Check the application versions:
+or a local Compose test project.
+
+---
+
+## 7. Verify the image before publishing or deploying
+
+Check application versions:
 
 ```bash
 docker run --rm \
-  ghcr.io/duthink/erpnext-custom:v16-test \
+  <IMAGE_REGISTRY>/<IMAGE_NAME>:v16-local-test \
   bench version
 ```
 
-Expected structure:
+Expected current v16 stack:
 
 ```text
-erpnext 16.34.2
-frappe 16.33.1
-hrms 16.18.1
+erpnext          16.34.2
+frappe           16.33.1
+hrms             16.18.1
 india_compliance 16.9.0
 ```
 
@@ -264,58 +383,108 @@ Check Python:
 
 ```bash
 docker run --rm \
-  ghcr.io/duthink/erpnext-custom:v16-test \
+  <IMAGE_REGISTRY>/<IMAGE_NAME>:v16-local-test \
   python --version
 ```
 
-Check the image itself:
+Check the local image identity:
 
 ```bash
 docker image inspect \
-  ghcr.io/duthink/erpnext-custom:v16-test \
+  <IMAGE_REGISTRY>/<IMAGE_NAME>:v16-local-test \
   --format '{{.Id}}'
 ```
 
-Record the resulting image identity for the local test.
+The local image ID can be useful for debugging.
+
+For the production release record, however, retain:
+
+```text
+Git commit
+image tag
+registry digest
+bench version
+Python/runtime version
+application manifest
+```
+
+### Important distinction
+
+This command:
+
+```bash
+bench version
+```
+
+verifies the applications contained in the image.
+
+It does **not** verify the applications installed in a site's database.
+
+For an existing site, separately run:
+
+```bash
+docker compose \
+  -f production.yaml \
+  exec backend \
+  bench --site <site> list-apps
+```
+
+---
 
 ## 8. Create an immutable release tag
 
-For a candidate that is ready for staging, use a traceable immutable tag.
+For a release candidate, use a traceable immutable tag.
 
-Example:
+One useful pattern is:
 
 ```bash
 BUILD_DATE=$(date +%Y%m%d)
 GIT_SHA=$(git rev-parse --short HEAD)
 
-IMAGE="ghcr.io/duthink/erpnext-custom"
+IMAGE="ghcr.io/your-org/erpnext-custom"
 IMAGE_TAG="${IMAGE}:${BUILD_DATE}-${GIT_SHA}"
 
 echo "Image: $IMAGE_TAG"
 ```
 
-The Git commit should represent the exact repository state used to build the image.
-
-For a release candidate, prefer a semantic/traceable release tag such as:
+For a version-specific ERPNext release, a semantic tag may also be appropriate:
 
 ```text
-v16.34.2-rc1
+<IMMUTABLE_TAG>
 ```
 
-or another uniquely traceable immutable tag.
+The important properties are:
 
-Record both the Git commit and the registry digest in the release record.
+```text
+unique
+traceable
+immutable for deployment
+```
 
-Do not use `production-latest`, `staging-latest`, or `latest` as the production version identifier.
+Record the Git commit used for the build.
 
-## 9. Build the staging candidate
+Do not use:
 
-From the local checkout:
+```text
+latest
+production-latest
+staging-latest
+```
+
+as the production release identity.
+
+The **registry digest** is the authoritative immutable identity after publishing.
+
+---
+
+## 9. Build the staging release image
+
+From the local repository checkout:
 
 ```bash
 docker buildx build \
   --load \
-  --secret id=apps_json,src=production/apps.json \
+  --secret id=apps_json,src=<approved-apps-manifest> \
   --build-arg=FRAPPE_IMAGE_PREFIX=frappe \
   --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
   --build-arg=FRAPPE_BRANCH=version-16 \
@@ -327,34 +496,64 @@ docker buildx build \
 Verify:
 
 ```bash
-docker run --rm "$IMAGE_TAG" bench version
+docker run --rm \
+  "$IMAGE_TAG" \
+  bench version
 ```
 
-Do not push an image that has not passed the local verification.
+Do not publish an image that has not passed local verification.
 
-## 10. Push the candidate image
+For a major-version release, also perform the required local migration testing before staging.
 
-Log in to GHCR using credentials appropriate for the environment:
+See:
+
+[`erpnext-v16-upgrade-plan.md`](erpnext-v16-upgrade-plan.md)
+
+---
+
+## 10. Publish the image to GHCR
+
+Authenticate to GHCR using an appropriate token:
 
 ```bash
-echo "$GITHUB_TOKEN" |   docker login ghcr.io   -u duthink   --password-stdin
+echo "$GITHUB_TOKEN" | \
+  docker login ghcr.io \
+  -u <GHCR_USERNAME> \
+  --password-stdin
 ```
 
-Then push the immutable tag:
+Push:
 
 ```bash
 docker push "$IMAGE_TAG"
 ```
 
-Verify the remote registry digest:
+Verify the remote artifact:
 
 ```bash
 docker buildx imagetools inspect "$IMAGE_TAG"
 ```
 
-Record the digest in the release record.
+Record the resulting digest.
 
-### GHCR credential-helper fallback
+A release record should look like:
+
+```text
+Git commit:
+Image:
+Registry digest:
+ERPNext:
+Frappe:
+HRMS:
+India Compliance:
+Python:
+```
+
+Do not treat a successful `docker push` as sufficient verification. Confirm the remote digest.
+
+---
+
+## 11. GHCR credential-helper fallback
 
 The host may have Docker configured with the `pass` credential store:
 
@@ -364,9 +563,21 @@ The host may have Docker configured with the `pass` credential store:
 }
 ```
 
-If Docker reports an OpenPGP/GPG credential decryption error even though `pass show` can read the stored entry, treat this as a **Docker → docker-credential-pass → GPG/OpenPGP** authentication-helper problem, not an image-build or GHCR problem.
+If Docker reports an OpenPGP/GPG credential decryption error while `pass show` can still read the stored entry, treat this as a:
 
-Use an isolated temporary Docker configuration for the GHCR push rather than changing the system-wide GPG/pass setup:
+```text
+Docker
+  ↓
+docker-credential-pass
+  ↓
+GPG/OpenPGP
+```
+
+credential-helper problem.
+
+Do not replace or disable the system-wide GPG/pass configuration merely to work around a single GHCR publishing operation.
+
+Use a short-lived isolated Docker configuration:
 
 ```bash
 mkdir -p ~/.docker/ghcr-push
@@ -381,185 +592,368 @@ EOF
 
 export DOCKER_CONFIG="$HOME/.docker/ghcr-push"
 
-docker login ghcr.io -u duthink
+docker login ghcr.io -u <GHCR_USERNAME>
 docker push "$IMAGE_TAG"
 docker buildx imagetools inspect "$IMAGE_TAG"
 ```
 
-Docker may warn that credentials are stored in the temporary configuration without a credential helper. This is acceptable only for the short-lived publishing operation.
+Docker may warn that credentials are stored in the temporary configuration without a credential helper.
 
-Clean up immediately after the digest has been verified:
+For a short-lived publishing configuration, clean it up immediately:
 
 ```bash
 rm -rf ~/.docker/ghcr-push
 unset DOCKER_CONFIG
 ```
 
-Do **not** disable or replace the host's system-wide GPG/pass credential configuration merely to work around this deployment issue.
-
-See the separate incident record for the original diagnosis and resolution:
+See the separate incident record:
 
 [`GHCR Docker Authentication – OpenPGP Issue and Resolution.md`](GHCR%20Docker%20Authentication%20%E2%80%93%20OpenPGP%20Issue%20and%20Resolution.md)
 
-## 11. Staging deployment
+---
+
+## 12. Staging deployment
 
 The image tag is selected in the staging environment configuration.
 
-The staging deployment should:
+The staging release process is:
 
 ```text
-1. Select the immutable candidate image
-2. Regenerate the complete Compose configuration
-3. Start only the staging application project when shared infra is already running
+1. Select immutable candidate image
+2. Regenerate complete Compose configuration
+3. Deploy staging application project
 4. Run database migration if required
-5. Verify image versions and installed site applications
-6. Perform technical smoke tests
-7. Perform authenticated UAT
+5. Verify image versions
+6. Verify site-installed applications
+7. Run technical smoke tests
+8. Run authenticated UAT
 ```
 
-Staging and production are separate Compose projects and separate site/data volumes.
+### Current staging architecture
+
+Staging Git root:
+
+```text
+<STAGING_GIT_ROOT>
+```
+
+Staging ERP installation:
+
+```text
+<STAGING_ERP_ROOT>
+```
+
+Staging runs as its own application project.
+
+The current server also contains production and shared infrastructure on the same physical host.
+
+Shared infrastructure:
+
+```text
+MariaDB: <MARIADB_IMAGE>
+Traefik: <TRAEFIK_IMAGE>
+```
 
 Do not copy staging environment files, site volumes, generated Compose files, or database credentials into production.
 
-## 12. Activate applications on a site
+### Deploy staging with existing shared infrastructure
 
-Putting an application into the image does not automatically install it into every site's database.
-
-Always compare `bench --site <site> list-apps` with the intended site application set before installing an application during an upgrade.
-
-For an existing site:
+When shared MariaDB/Traefik infrastructure is already running and the deployment must touch only the application project:
 
 ```bash
-docker compose \
-  -f production/production.yaml \
-  exec backend \
-  bench --site erp.example.com list-apps
+./scripts/deploy.sh --regenerate
 ```
 
-Install an application when required:
+Inspect the generated Compose file first.
+
+Then:
+
+```bash
+./scripts/deploy.sh --skip-infra
+```
+
+Do not assume `--skip-infra` is the correct mode for every host. It is appropriate for this shared-infrastructure architecture.
+
+---
+
+## 13. Activate applications on a site
+
+Putting an application into the image does not automatically install it into a site's database.
+
+Always compare:
+
+```bash
+bench --site <site> list-apps
+```
+
+with the intended site application set before installing anything.
+
+Example:
 
 ```bash
 docker compose \
-  -f production/production.yaml \
+  -f production.yaml \
   exec backend \
-  bench --site erp.example.com install-app hrms
+  bench --site <site> list-apps
+```
+
+If HRMS is intentionally required:
+
+```bash
+docker compose \
+  -f production.yaml \
+  exec backend \
+  bench --site <site> install-app hrms
 ```
 
 Then migrate:
 
 ```bash
 docker compose \
-  -f production/production.yaml \
+  -f production.yaml \
   exec backend \
-  bench --site erp.example.com migrate
+  bench --site <site> migrate
 ```
 
-For a major-version upgrade, take a verified backup before running migrations.
+For a major-version upgrade, take and verify the required backup before migration.
 
-## 13. Production promotion
+### Current production application set
 
-Production should use the **same immutable image that passed staging/UAT**.
+The current verified production site has:
 
-Do not rebuild it from `main`.
+```text
+frappe
+erpnext
+hrms
+india_compliance
+```
 
-After staging approval:
+This is a site-level fact, not merely an image-content fact.
+
+---
+
+## 14. Production promotion
+
+Production uses the **same immutable image that passed staging/UAT**.
+
+Do not rebuild the image from `main` after staging approval.
+
+Promotion:
 
 ```text
 GitHub staging
       │
+      │ approved
       ▼
 GitHub main
       │
       ▼
-Production deploy
+production deploy
       │
       ▼
-same image tag / digest
+same image tag / same registry digest
 ```
 
-Set production:
+### Production paths
+
+Production Git root:
+
+```text
+<PRODUCTION_GIT_ROOT>
+```
+
+Production ERP installation:
+
+```text
+<PRODUCTION_ERP_ROOT>
+```
+
+From the production Git root:
+
+```bash
+cd <PRODUCTION_GIT_ROOT>
+```
+
+Set/select the approved immutable image:
 
 ```env
-CUSTOM_IMAGE=ghcr.io/duthink/erpnext-custom
+CUSTOM_IMAGE=<IMAGE_REGISTRY>/<IMAGE_NAME>
 CUSTOM_TAG=<approved-immutable-tag>
 PULL_POLICY=always
 ```
 
-Then regenerate the complete generated Compose file:
+Regenerate:
 
 ```bash
-./scripts/deploy.sh --regenerate
+./production/scripts/deploy.sh --regenerate
 ```
 
-Inspect the generated configuration before deploying:
+Inspect the complete generated configuration before deployment:
 
 ```bash
-grep -nE 'image:|traefik.http.routers|REDIS_|SITES' production/production.yaml
+grep -nE \
+  'image:|traefik.http.routers|REDIS_|SITES|SITES_RULE' \
+  production/production.yaml
 ```
 
-On a host where shared MariaDB/Traefik infrastructure is already running and must not be disturbed, use:
+Then deploy:
 
 ```bash
-./scripts/deploy.sh --skip-infra
+./production/scripts/deploy.sh
 ```
 
-For a standalone production host where this project owns the infrastructure, use the normal deploy command:
+For the current production architecture, use the normal production deployment command. Do not use the staging `--skip-infra` behavior unless the deployment procedure for that environment explicitly requires it.
 
-```bash
-./scripts/deploy.sh
+---
+
+## 15. Generate, inspect, then deploy
+
+Do not manually edit the generated:
+
+```text
+production/production.yaml
 ```
 
-## 14. Verify production
-
-Check the running containers:
+Change the intended environment/configuration inputs and regenerate:
 
 ```bash
-docker compose -f production/production.yaml ps
+./production/scripts/deploy.sh --regenerate
 ```
 
-Check the image references:
+Then inspect:
 
 ```bash
-docker compose -f production/production.yaml images
+grep -n 'image:' production/production.yaml
 ```
 
-Check application versions:
+Also verify the generated file contains the intended:
+
+```text
+image
+site/router rule
+Redis configuration
+networks
+shared-infrastructure references
+```
+
+The generated Compose file is an output.
+
+It should not be treated as the primary configuration source.
+
+---
+
+## 16. Verify production after deployment
+
+Check containers:
 
 ```bash
-docker compose -f production/production.yaml \
+docker compose \
+  -f production/production.yaml \
+  ps
+```
+
+Check image references:
+
+```bash
+docker compose \
+  -f production/production.yaml \
+  images
+```
+
+Verify the application image versions:
+
+```bash
+docker compose \
+  -f production/production.yaml \
   exec backend \
   bench version
 ```
 
-Check site applications:
+Verify site-installed applications:
 
 ```bash
-docker compose -f production/production.yaml \
+docker compose \
+  -f production/production.yaml \
   exec backend \
-  bench --site erp.example.com list-apps
+  bench --site <PRODUCTION_SITE> list-apps
 ```
 
-Clear cache after a major application update when appropriate:
-
-```bash
-docker compose -f production/production.yaml \
-  exec backend \
-  bench --site erp.example.com clear-cache
-```
-
-Run the application smoke tests and critical business workflows before closing the deployment window.
-
-## 15. Rollback
-
-The image rollback mechanism is:
+For the current production release, expected applications are:
 
 ```text
-current image
-     ↓
+frappe
+erpnext
+hrms
+india_compliance
+```
+
+Verify HTTPS:
+
+```bash
+curl -sk -o /dev/null \
+  -w 'HTTP %{http_code}\n' \
+  https://<PRODUCTION_SITE>/login
+```
+
+Expected:
+
+```text
+HTTP 200
+```
+
+Verify API:
+
+```bash
+curl -sk \
+  https://<PRODUCTION_SITE>/api/method/ping
+```
+
+Expected:
+
+```json
+{ "message": "pong" }
+```
+
+Then test browser login and representative business workflows.
+
+---
+
+## 17. Cache and frontend considerations
+
+The layered image contains the built application assets.
+
+Do not manually copy assets between containers to make one deployment match another.
+
+When an application release requires cache invalidation, use the Bench command:
+
+```bash
+docker compose \
+  -f production/production.yaml \
+  exec backend \
+  bench --site <PRODUCTION_SITE> clear-cache
+```
+
+Restart the relevant application services when required.
+
+For an HTTP 500 or frontend asset problem, inspect logs and current container/image state before changing files manually.
+
+See:
+
+[`troubleshooting/css-js-404-after-custom-app.md`](troubleshooting/css-js-404-after-custom-app.md)
+
+---
+
+## 18. Rollback
+
+The application-image rollback mechanism is:
+
+```text
+current approved image
+        ↓
 previous approved immutable image
 ```
 
-Change `CUSTOM_TAG` back to the previously known-good image tag:
+Set:
 
 ```env
 CUSTOM_TAG=<previous-approved-tag>
@@ -571,29 +965,46 @@ Regenerate:
 ./scripts/deploy.sh --regenerate
 ```
 
-Then redeploy:
+Then redeploy using the environment's normal deployment command.
 
-```bash
-./scripts/deploy.sh
-```
+### Critical database warning
 
-**Important:** an application-image rollback is not automatically a database rollback.
+An image rollback is **not** automatically a database rollback.
 
-If a migration has changed the database schema, reverting the container image alone may not restore the previous database state. For major-version migrations, the database backup/restore procedure is the authoritative rollback mechanism.
+If a site migration has changed the database schema/data, reverting the container image alone may leave the previous application incompatible with the current database.
 
-## 16. Updating an application
-
-To update an application:
+For major-version upgrades:
 
 ```text
-1. Change the pinned version in apps.json
+pre-upgrade backup
+        ↓
+database/files restore
+        ↓
+previous compatible application release
+```
+
+The documented backup/restore procedure is therefore the authoritative database rollback mechanism.
+
+See:
+
+[`../backup/README.md`](../backup/README.md)
+
+---
+
+## 19. Updating an application
+
+To update a pinned application:
+
+```text
+1. Change the application version in the approved build manifest
 2. Commit the change locally
 3. Build a new immutable image
 4. Verify bench version
 5. Push the new image
-6. Deploy to staging
-7. Perform UAT
-8. Promote the same artifact to production
+6. Record the registry digest
+7. Deploy to staging
+8. Perform UAT
+9. Promote the same artifact to production
 ```
 
 Example:
@@ -605,12 +1016,12 @@ Example:
 }
 ```
 
-Rebuild using the same BuildKit-secret workflow:
+Rebuild using the same BuildKit-secret pattern:
 
 ```bash
 docker buildx build \
   --load \
-  --secret id=apps_json,src=production/apps.json \
+  --secret id=apps_json,src=<approved-apps-manifest> \
   --build-arg=FRAPPE_IMAGE_PREFIX=frappe \
   --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
   --build-arg=FRAPPE_BRANCH=version-16 \
@@ -619,9 +1030,15 @@ docker buildx build \
   .
 ```
 
-## 17. Adding a custom app
+Do not mix application pin changes with unrelated production host changes unless the combined change has been tested together.
 
-Add the application to `production/apps.json`:
+---
+
+## 20. Adding a custom app
+
+Add the application to the approved build manifest.
+
+Example:
 
 ```json
 [
@@ -644,74 +1061,126 @@ Add the application to `production/apps.json`:
 ]
 ```
 
-Build and test a new immutable image.
+Validate:
 
-The application being present in the image does not by itself modify an existing site's database. Use `bench install-app` and `bench migrate` where required.
+```bash
+python3 -m json.tool <approved-apps-manifest>
+```
 
-## 18. Private application repositories
+Build a new immutable image.
 
-Do not commit access tokens inside `apps.json`.
+Then:
 
-For private repositories, use an authentication mechanism appropriate for the build environment and ensure credentials are supplied as secrets rather than committed files or build arguments.
+```text
+local verification
+      ↓
+staging
+      ↓
+UAT
+      ↓
+production
+```
 
-Never expose a token through:
+The custom app being present in the image does not by itself change an existing site's database.
+
+Use:
+
+```bash
+bench --site <site> install-app your_app
+```
+
+and then:
+
+```bash
+bench --site <site> migrate
+```
+
+when the site actually requires installation/migration.
+
+---
+
+## 21. Private application repositories
+
+Do not commit access tokens inside application manifests.
+
+For private repositories, use an authentication mechanism appropriate for the build environment.
+
+Credentials should be supplied as secrets, not embedded in:
 
 ```text
 Dockerfile ARG
 Docker image layer
 Git commit
-public apps.json
+public application manifest
 ```
 
-The BuildKit secret mechanism used by the current Containerfile is intended to avoid leaking the application manifest through normal image build arguments.
+The BuildKit secret pattern is part of the repository's intended approach for keeping build-time manifest data out of ordinary build arguments.
 
-## 19. CI/CD
+---
 
-The repository may use GitHub Actions to build and publish images.
+## 22. CI/CD
 
-The important requirement is that CI uses the same layered Containerfile and the same BuildKit secret mechanism as local builds:
+GitHub Actions may be used to build and publish images.
+
+The important requirement is that CI must use the same:
+
+```text
+images/layered/Containerfile
+```
+
+and the same BuildKit secret mechanism as local builds.
+
+Conceptually:
 
 ```yaml
 secrets: |
-  id=apps_json,src=production/apps.json
+  id=apps_json,src=<approved-apps-manifest>
 ```
 
-The workflow should:
+The release workflow should be:
 
 ```text
 checkout
-  ↓
-prepare apps.json
-  ↓
+   ↓
+prepare approved manifest
+   ↓
 build with BuildKit secret
-  ↓
+   ↓
 smoke-test image
-  ↓
+   ↓
 push immutable image
+   ↓
+record digest
 ```
 
-Do not maintain a separate CI implementation based on `APPS_JSON_BASE64`.
+Do not maintain a second production build process based on:
 
-The upstream reusable image workflow in this repository already demonstrates the BuildKit secret pattern.
+```text
+APPS_JSON_BASE64
+```
 
-## 20. Troubleshooting
+Different build mechanisms create different artifacts and weaken reproducibility.
+
+---
+
+## 23. Troubleshooting
 
 ### Build fails with "app not found"
 
 Validate the manifest:
 
 ```bash
-python3 -m json.tool production/apps.json
+python3 -m json.tool <approved-apps-manifest>
 ```
 
-Verify the repository:
+Verify repository visibility/access:
 
 ```bash
 git ls-remote https://github.com/frappe/erpnext.git
 git ls-remote https://github.com/resilient-tech/india-compliance.git
 ```
 
-Verify the requested tag:
+Verify the requested application tag:
 
 ```bash
 git ls-remote --tags \
@@ -719,74 +1188,174 @@ git ls-remote --tags \
   v16.34.2
 ```
 
-Check private repository authentication separately.
+For private applications, check authentication separately.
+
+---
 
 ### Build fails before `bench init`
 
-Verify the base images:
+Verify base images:
 
 ```bash
 docker pull frappe/build:version-16
 docker pull frappe/base:version-16
 ```
 
-Verify BuildKit:
+Verify Buildx:
 
 ```bash
 docker buildx version
 ```
 
-### Build does not see `apps.json`
+Verify Docker has BuildKit/buildx secret support.
+
+---
+
+### Build does not see the application manifest
 
 Use:
 
 ```bash
---secret id=apps_json,src=production/apps.json
+--secret id=apps_json,src=<approved-apps-manifest>
 ```
 
-and do not replace it with:
+and not:
 
 ```bash
 --build-arg=APPS_JSON_BASE64=...
 ```
 
-The current layered Containerfile expects the secret named exactly:
+The secret name must be exactly:
 
 ```text
 apps_json
 ```
 
+and the current layered Containerfile must consume that secret.
+
+---
+
 ### Application versions are unexpected
 
-Check the image:
+Check:
 
 ```bash
-docker run --rm "$IMAGE_TAG" bench version
+docker run --rm \
+  "$IMAGE_TAG" \
+  bench version
 ```
 
-Remember that:
+Confirm:
 
 ```text
 FRAPPE_BRANCH=version-16
 ```
 
-selects the Frappe framework line through the Frappe base images, while individual applications are pinned in `apps.json`.
+and confirm the application versions in the approved build manifest.
 
-Because `version-16` is a moving reference, record the base-image digest used for important production builds.
+Remember:
+
+```text
+Frappe Framework
+    ↓
+FRAPPE_BRANCH / base-build images
+
+ERPNext / HRMS / India Compliance / custom apps
+    ↓
+application manifest
+```
+
+Because `version-16` is a moving reference, record the final custom image digest for important production releases.
+
+---
+
+### Site-installed applications are unexpected
+
+Check:
+
+```bash
+docker compose \
+  -f production/production.yaml \
+  exec backend \
+  bench --site <site> list-apps
+```
+
+Do not infer site installation from:
+
+```bash
+bench version
+```
+
+The image may contain an application that the site's database does not have installed.
+
+---
 
 ### Assets return 404
 
-First verify every application container is running the same image:
+First verify that application containers are running the intended image:
 
 ```bash
-docker compose -f production/production.yaml images
+docker compose \
+  -f production/production.yaml \
+  images
 ```
 
-Then inspect assets inside the image/container.
+Then inspect:
 
-The current layered image architecture moves built assets into the image and links them into the mounted sites volume during container startup.
+```text
+application assets inside the image/container
+mounted sites/assets
+frontend logs
+backend logs
+```
 
-Restart/redeploy the affected application containers rather than manually copying application assets between containers.
+The current layered architecture builds assets into the image and links them into the mounted sites volume during container startup.
+
+Do not manually copy application assets between containers as a permanent fix.
+
+After an application update, redeploy the intended image and clear the site cache where appropriate:
+
+```bash
+docker compose \
+  -f production/production.yaml \
+  exec backend \
+  bench --site <site> clear-cache
+```
+
+For the known custom-app CSS/JS failure mode, see:
+
+[`troubleshooting/css-js-404-after-custom-app.md`](troubleshooting/css-js-404-after-custom-app.md)
+
+---
+
+### Production returns HTTP 500 after deployment
+
+First inspect logs and container state:
+
+```bash
+docker compose \
+  -f production/production.yaml \
+  ps
+```
+
+```bash
+./scripts/logs.sh --tail
+```
+
+Then, where the failure matches the observed v16 recovery path, clear cache:
+
+```bash
+docker compose \
+  -f production/production.yaml \
+  exec backend \
+  bench --site <PRODUCTION_SITE> clear-cache
+```
+
+Restart application services as required and test again.
+
+Do not assume that cache clearing is the universal cause/fix for HTTP 500. Use logs to identify the actual failure.
+
+---
 
 ### Cannot push to GHCR
 
@@ -802,9 +1371,13 @@ Then:
 docker push "$IMAGE_TAG"
 ```
 
-If authentication succeeds but push is denied, verify the account/token has permission to publish the package.
+If authentication succeeds but push is denied, verify that the account/token has permission to publish the package.
 
-## 21. Operational rules
+For the Docker credential-helper/GPG failure observed previously, use the isolated `DOCKER_CONFIG` procedure in section 11.
+
+---
+
+## 24. Operational rules
 
 ### Rule 1 — Never build production on the server
 
@@ -818,7 +1391,7 @@ At minimum verify:
 bench version
 ```
 
-and perform the local/staging smoke tests.
+and perform the required local/staging smoke tests.
 
 ### Rule 3 — Use immutable image tags
 
@@ -828,22 +1401,23 @@ Prefer:
 YYYYMMDD-GITSHA
 ```
 
-or another uniquely traceable tag.
+or another uniquely traceable release tag.
 
-Avoid relying on:
+Avoid:
 
 ```text
 latest
 production-latest
+staging-latest
 ```
 
-as the production identity.
+as deployment identities.
 
 ### Rule 4 — Promote the same artifact
 
-Record the registry digest and ensure staging and production point to the same image digest.
+Record the registry digest and ensure staging and production reference the same immutable image digest.
 
-### Rule 5 — Keep old images
+### Rule 5 — Keep previous images
 
 Retain previous production images long enough to support a practical rollback window.
 
@@ -852,26 +1426,29 @@ Retain previous production images long enough to support a practical rollback wi
 For major application/database changes:
 
 ```bash
-./scripts/backup-site.sh <site> --with-files --auto-copy
+./scripts/backup-site.sh \
+  <site> \
+  --with-files \
+  --auto-copy
 ```
 
-Verify that the backup completed successfully before proceeding.
+Verify that the backup completed successfully before migrating.
 
-### Rule 7 — Do not manually edit generated `production.yaml`
+### Rule 7 — Do not manually edit generated Compose
 
-Change the environment/configuration inputs and regenerate it:
+Change the underlying environment/configuration inputs and regenerate:
 
 ```bash
 ./scripts/deploy.sh --regenerate
 ```
 
-### Rule 8 — Do not run raw SQL cleanup scripts during a major-version migration
+### Rule 8 — Do not use raw SQL as a migration shortcut
 
-Database maintenance scripts that depend on internal Frappe table names must be reviewed for the target Frappe version before use.
+Database maintenance scripts that rely on internal Frappe table structures must be reviewed against the target Frappe version before use.
 
 ### Rule 9 — Record the exact artifact
 
-For each promoted image, retain:
+For every promoted image retain:
 
 ```text
 repository commit
@@ -879,18 +1456,29 @@ image tag
 registry digest
 bench version
 Python/runtime version
-application manifest version
+application manifest
 ```
 
-The image tag is convenient for deployment; the registry digest is the authoritative immutable identity.
+The tag is convenient for deployment; the registry digest is the authoritative immutable identity.
 
-## 22. Standard release checklist
+### Rule 10 — Keep image and database state separate
+
+An image can contain a newer application without changing a site's database.
+
+A site migration can change the database without changing the image contents.
+
+Track both.
+
+---
+
+## 25. Standard release checklist
 
 ### Local
 
-- [ ] Working tree clean or intentionally modified
-- [ ] Correct application versions pinned in `apps.json`
-- [ ] Production/staging manifest choice is intentional
+- [ ] Working tree reviewed
+- [ ] Correct application versions pinned in the approved manifest
+- [ ] Test/release manifest choice is intentional
+- [ ] Manifest validates as JSON
 - [ ] Build uses `docker buildx`
 - [ ] Build uses `--secret id=apps_json`
 - [ ] Image builds successfully
@@ -903,61 +1491,161 @@ The image tag is convenient for deployment; the registry digest is the authorita
 
 - [ ] Immutable image pushed
 - [ ] Registry digest recorded
-- [ ] Staging uses the candidate image
-- [ ] Backup taken before migration
-- [ ] `bench migrate` completed
+- [ ] Staging uses the intended image tag
+- [ ] Image digest verified
+- [ ] Backup taken before migration where required
+- [ ] `bench migrate` completed where required
+- [ ] Site-installed applications verified
 - [ ] Login verified
 - [ ] Critical ERP workflows tested
 - [ ] HRMS tested where applicable
 - [ ] India Compliance tested where applicable
 - [ ] UAT approved
+- [ ] Burn-in completed where required
 
 ### Production
 
 - [ ] Staging/UAT approved
+- [ ] GitHub `main` contains the approved state
 - [ ] Same immutable image tag selected
 - [ ] Same registry digest verified
-- [ ] Production backup completed
-- [ ] Maintenance window confirmed
+- [ ] Pre-change production backup completed for migrations
 - [ ] `production.yaml` regenerated
+- [ ] Generated Compose file inspected
 - [ ] Containers updated
 - [ ] `bench version` verified
-- [ ] Site migrations completed
+- [ ] Site-installed applications verified
+- [ ] Site migrations completed where required
+- [ ] HTTPS `/login` returns 200
+- [ ] API ping returns `pong`
+- [ ] Browser login verified
 - [ ] Critical workflows verified
 - [ ] Logs checked
 - [ ] Previous image retained for rollback
 
-## 23. Repository references
+---
 
-Related repository documentation:
+## 26. Related repository documentation
+
+### Production
 
 - [Production README](README.md)
 - [Operations Runbook](operations-runbook.md)
+
+### Major upgrades
+
 - [ERPNext v16 Upgrade Plan](erpnext-v16-upgrade-plan.md)
 - [Pre-update Safety Checklist](pre-update-safety-checklist.md)
 
-The image build source is:
+### Backups
+
+- [Automated Backup README](../backup/README.md)
+
+### Troubleshooting
+
+- [CSS/JS 404 after Custom App](troubleshooting/css-js-404-after-custom-app.md)
+- [GHCR Docker Authentication – OpenPGP Issue and Resolution](GHCR%20Docker%20Authentication%20%E2%80%93%20OpenPGP%20Issue%20and%20Resolution.md)
+
+### Build source
 
 ```text
 images/layered/Containerfile
 ```
 
-The application manifest is:
-
-```text
-production/apps.json
-```
-
-For temporary version testing, use a separate manifest such as:
-
-```text
-production/apps.json
-```
+The application manifest is a build-time input and may be represented by a dedicated release/test manifest depending on the release workflow. The exact manifest used for a deployed immutable image must be recorded with the release.
 
 ---
 
-**Pattern:** Layered custom image with immutable promotion
+## 27. Current verified production release
 
-**Build mechanism:** Docker BuildKit secret for `apps.json`
+Current image:
 
-**Promotion model:** Build locally → staging/UAT → same artifact → production
+```text
+<IMAGE_REGISTRY>/<IMAGE_NAME>:<IMMUTABLE_TAG>
+```
+
+Registry digest:
+
+```text
+sha256:<REGISTRY_DIGEST>
+```
+
+Verified application versions:
+
+```text
+Frappe           16.33.1
+ERPNext          16.34.2
+HRMS             16.18.1
+India Compliance 16.9.0
+Python            3.14.7
+```
+
+The same immutable image artifact passed staging/UAT and was promoted to production.
+
+---
+
+## 28. Deployment model
+
+The repository's standard promotion model is:
+
+```text
+LOCAL VS CODE
+     ↓
+Git commit + push
+     ↓
+GitHub / staging
+     ↓
+Staging deployment + migration + UAT
+     ↓
+GitHub / main
+     ↓
+Production deployment
+```
+
+The application image model is:
+
+```text
+Build locally
+     ↓
+Publish to GHCR
+     ↓
+Record digest
+     ↓
+Promote exact same artifact
+```
+
+Servers are deployment targets, not build environments.
+
+---
+
+## 29. Final operating principles
+
+The custom-image workflow exists to make the ERPNext deployment:
+
+```text
+reproducible
+traceable
+immutable
+testable
+rollback-aware
+```
+
+The most important rule is simple:
+
+> **Build once. Verify it. Record the digest. Promote the exact artifact.**
+
+---
+
+**Repository:** `<GITHUB_ORG>/<GITHUB_REPO>`
+
+**Image pattern:** Layered custom image with immutable promotion
+
+**Build mechanism:** Docker BuildKit secret for the application manifest
+
+**Current release:** Frappe 16.33.1 / ERPNext 16.34.2 / HRMS 16.18.1 / India Compliance 16.9.0
+
+**Current image:** `<IMAGE_REGISTRY>/<IMAGE_NAME>:<IMMUTABLE_TAG>`
+
+**Current registry digest:** `sha256:<REGISTRY_DIGEST>`
+
+**Last updated:** September 17, 2026
