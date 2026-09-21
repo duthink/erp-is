@@ -20,17 +20,17 @@ warnings=0
 
 # Logging functions
 echo_info() {
-    echo -e "${GREEN}✓${NC} $1"
+  echo -e "${GREEN}✓${NC} $1"
 }
 
 echo_warn() {
-    echo -e "${YELLOW}⚠${NC} $1"
-    warnings=$((warnings + 1))
+  echo -e "${YELLOW}⚠${NC} $1"
+  warnings=$((warnings + 1))
 }
 
 echo_error() {
-    echo -e "${RED}✗${NC} $1"
-    errors=$((errors + 1))
+  echo -e "${RED}✗${NC} $1"
+  errors=$((errors + 1))
 }
 
 # Validation patterns
@@ -39,8 +39,10 @@ readonly PLACEHOLDER_DOMAINS="yourdomain\.com|example\.com"
 readonly EMAIL_REGEX="^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
 
 # Get script directory and change to production directory
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PRODUCTION_DIR="$(dirname "$SCRIPT_DIR")"
+readonly SCRIPT_DIR
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PRODUCTION_DIR
+PRODUCTION_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PRODUCTION_DIR"
 
@@ -49,42 +51,42 @@ cd "$PRODUCTION_DIR"
 # ---------------------------------------------------------------------------
 
 get_env_value() {
-    local file="$1"
-    local var="$2"
+  local file="$1"
+  local var="$2"
 
-    if [[ ! -f "$file" ]]; then
-        echo ""
-        return 0
-    fi
+  if [[ ! -f "$file" ]]; then
+    echo ""
+    return 0
+  fi
 
-    grep "^${var}=" "$file" 2>/dev/null |
-        head -n 1 |
-        cut -d'=' -f2- ||
-        true
+  grep "^${var}=" "$file" 2>/dev/null |
+    head -n 1 |
+    cut -d'=' -f2- ||
+    true
 }
 
 validate_required_vars() {
-    local file="$1"
-    shift
+  local file="$1"
+  shift
 
-    local missing_vars=()
-    local var
-    local value
+  local missing_vars=()
+  local var
+  local value
 
-    for var in "$@"; do
-        value="$(get_env_value "$file" "$var")"
+  for var in "$@"; do
+    value="$(get_env_value "$file" "$var")"
 
-        if [[ -z "$value" ]]; then
-            missing_vars+=("$var")
-        fi
-    done
-
-    if [[ ${#missing_vars[@]} -gt 0 ]]; then
-        echo_error "$file missing required variable(s): ${missing_vars[*]}"
-        return 1
+    if [[ -z "$value" ]]; then
+      missing_vars+=("$var")
     fi
+  done
 
-    return 0
+  if [[ ${#missing_vars[@]} -gt 0 ]]; then
+    echo_error "$file missing required variable(s): ${missing_vars[*]}"
+    return 1
+  fi
+
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -92,53 +94,53 @@ validate_required_vars() {
 # ---------------------------------------------------------------------------
 
 validate_env_file() {
-    local file="$1"
+  local file="$1"
 
-    shift
-    local required_vars=("$@")
+  shift
+  local required_vars=("$@")
 
-    echo "Checking $file..."
+  echo "Checking $file..."
 
-    if [[ ! -f "$file" ]]; then
-        echo_error "$file not found"
-        echo "  Create it from ${file}.example or run ./scripts/deploy.sh --setup"
-        return 1
-    fi
+  if [[ ! -f "$file" ]]; then
+    echo_error "$file not found"
+    echo "  Create it from ${file}.example or run ./scripts/deploy.sh --setup"
+    return 1
+  fi
 
-    if [[ ! -s "$file" ]]; then
-        echo_error "$file is empty"
-        return 1
-    fi
+  if [[ ! -s "$file" ]]; then
+    echo_error "$file is empty"
+    return 1
+  fi
 
-    echo_info "File exists"
+  echo_info "File exists"
 
-    # Read non-comment assignments once.
-    local content
-    content="$(
-        grep -vE '^[[:space:]]*#' "$file" 2>/dev/null |
-            grep '=' ||
-            true
-    )"
+  # Read non-comment assignments once.
+  local content
+  content="$(
+    grep -vE '^[[:space:]]*#' "$file" 2>/dev/null |
+      grep '=' ||
+      true
+  )"
 
-    # Check placeholders.
-    if echo "$content" | grep -q "CHANGEME_"; then
-        echo_error "$file contains CHANGEME_ placeholders"
-        echo "$content" | grep "CHANGEME_" | sed 's/^/    /'
-    else
-        echo_info "No CHANGEME_ placeholders"
-    fi
+  # Check placeholders.
+  if echo "$content" | grep -q "CHANGEME_"; then
+    echo_error "$file contains CHANGEME_ placeholders"
+    echo "$content" | grep "CHANGEME_" | sed 's/^/    /'
+  else
+    echo_info "No CHANGEME_ placeholders"
+  fi
 
-    # Check weak passwords without printing password values.
-    if echo "$content" |
-        cut -d'=' -f2- |
-        grep -Eiq "$WEAK_PASSWORDS"; then
-        echo_warn "$file contains a weak/default password value"
-    fi
+  # Check weak passwords without printing password values.
+  if echo "$content" |
+    cut -d'=' -f2- |
+    grep -Eiq "$WEAK_PASSWORDS"; then
+    echo_warn "$file contains a weak/default password value"
+  fi
 
-    # Check required variables.
-    validate_required_vars "$file" "${required_vars[@]}" || true
+  # Check required variables.
+  validate_required_vars "$file" "${required_vars[@]}" || true
 
-    return 0
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -146,21 +148,21 @@ validate_env_file() {
 # ---------------------------------------------------------------------------
 
 validate_email() {
-    local email="$1"
-    local var_name="$2"
+  local email="$1"
+  local var_name="$2"
 
-    if [[ ! "$email" =~ $EMAIL_REGEX ]]; then
-        echo_error "$var_name has an invalid email format"
-        return 1
-    fi
+  if [[ ! "$email" =~ $EMAIL_REGEX ]]; then
+    echo_error "$var_name has an invalid email format"
+    return 1
+  fi
 
-    if echo "$email" | grep -Eqi "$PLACEHOLDER_DOMAINS"; then
-        echo_error "$var_name contains a placeholder domain"
-        return 1
-    fi
+  if echo "$email" | grep -Eqi "$PLACEHOLDER_DOMAINS"; then
+    echo_error "$var_name contains a placeholder domain"
+    return 1
+  fi
 
-    echo_info "$var_name format is valid"
-    return 0
+  echo_info "$var_name format is valid"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -168,16 +170,16 @@ validate_email() {
 # ---------------------------------------------------------------------------
 
 validate_password_strength() {
-    local password="$1"
-    local min_length="${2:-16}"
+  local password="$1"
+  local min_length="${2:-16}"
 
-    if [[ ${#password} -lt $min_length ]]; then
-        echo_warn "Password is shorter than $min_length characters (current length: ${#password})"
-        return 1
-    fi
+  if [[ ${#password} -lt $min_length ]]; then
+    echo_warn "Password is shorter than $min_length characters (current length: ${#password})"
+    return 1
+  fi
 
-    echo_info "Password length is acceptable (${#password} characters)"
-    return 0
+  echo_info "Password length is acceptable (${#password} characters)"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -185,34 +187,34 @@ validate_password_strength() {
 # ---------------------------------------------------------------------------
 
 validate_image_configuration() {
-    local custom_image custom_tag
+  local custom_image custom_tag
 
-    custom_image="$(get_env_value "production.env" "CUSTOM_IMAGE")"
-    custom_tag="$(get_env_value "production.env" "CUSTOM_TAG")"
+  custom_image="$(get_env_value "production.env" "CUSTOM_IMAGE")"
+  custom_tag="$(get_env_value "production.env" "CUSTOM_TAG")"
 
-    echo "Checking custom image configuration..."
+  echo "Checking custom image configuration..."
 
-    if [[ -z "$custom_image" ]]; then
-        echo_error "CUSTOM_IMAGE is missing from production.env"
-    else
-        echo_info "CUSTOM_IMAGE is set"
-    fi
+  if [[ -z "$custom_image" ]]; then
+    echo_error "CUSTOM_IMAGE is missing from production.env"
+  else
+    echo_info "CUSTOM_IMAGE is set"
+  fi
 
-    if [[ -z "$custom_tag" ]]; then
-        echo_error "CUSTOM_TAG is missing from production.env"
-    else
-        echo_info "CUSTOM_TAG is set: $custom_tag"
+  if [[ -z "$custom_tag" ]]; then
+    echo_error "CUSTOM_TAG is missing from production.env"
+  else
+    echo_info "CUSTOM_TAG is set: $custom_tag"
 
-        case "$custom_tag" in
-            latest|production-latest|staging-latest)
-                echo_warn "CUSTOM_TAG is mutable: $custom_tag"
-                echo "  Controlled deployments should use an immutable release tag."
-                echo "  Example: v16.34.2-build.20260910"
-                ;;
-        esac
-    fi
+    case "$custom_tag" in
+    latest | production-latest | staging-latest)
+      echo_warn "CUSTOM_TAG is mutable: $custom_tag"
+      echo "  Controlled deployments should use an immutable release tag."
+      echo "  Example: v16.34.2-build.20260910"
+      ;;
+    esac
+  fi
 
-    return 0
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -220,108 +222,110 @@ validate_image_configuration() {
 # ---------------------------------------------------------------------------
 
 validate_sites() {
-    local sites
-    local sites_rule
-    local backtick='`'
-    local quote="'"
-    local inner
+  local sites
+  local sites_rule
+  local backtick='`'
+  local quote="'"
+  local inner
 
-    sites="$(get_env_value "production.env" "SITES")"
-    sites_rule="$(get_env_value "production.env" "SITES_RULE")"
+  sites="$(get_env_value "production.env" "SITES")"
+  sites_rule="$(get_env_value "production.env" "SITES_RULE")"
 
-    if [[ -z "$sites" ]]; then
-        echo_error "SITES is empty"
-        return 1
-    fi
+  if [[ -z "$sites" ]]; then
+    echo_error "SITES is empty"
+    return 1
+  fi
 
-    if [[ -z "$sites_rule" ]]; then
-        echo_error "SITES_RULE is empty"
-        return 1
-    fi
+  if [[ -z "$sites_rule" ]]; then
+    echo_error "SITES_RULE is empty"
+    return 1
+  fi
 
-    # Required shell-safe forms:
-    #   SITES='`erp.example.com`'
-    #   SITES_RULE='Host(`erp.example.com`)'
-    #
-    # Use literal string prefixes/suffixes. Do not put backticks directly
-    # into shell expressions where they could be interpreted as syntax.
+  # Required shell-safe forms:
+  #   SITES='`erp.example.com`'
+  #   SITES_RULE='Host(`erp.example.com`)'
+  #
+  # Use literal string prefixes/suffixes. Do not put backticks directly
+  # into shell expressions where they could be interpreted as syntax.
 
-    local sites_prefix="${quote}${backtick}"
-    local sites_suffix="${backtick}${quote}"
+  local sites_prefix="${quote}${backtick}"
+  local sites_suffix="${backtick}${quote}"
 
-    if [[ "$sites" == "${sites_prefix}"*"${sites_suffix}" ]]; then
-        inner="${sites#"$sites_prefix"}"
-        inner="${inner%"$sites_suffix"}"
+  if [[ "$sites" == "${sites_prefix}"*"${sites_suffix}" ]]; then
+    inner="${sites#"$sites_prefix"}"
+    inner="${inner%"$sites_suffix"}"
 
-        if [[ -n "$inner" ]]; then
-            echo_info "SITES format is shell-safe"
-        else
-            echo_error "SITES contains an empty site name"
-        fi
+    if [[ -n "$inner" ]]; then
+      echo_info "SITES format is shell-safe"
     else
-        echo_error "SITES must use the shell-safe quoted backtick format"
-        echo_error "Expected a single-quoted, backtick-wrapped site name"
+      echo_error "SITES contains an empty site name"
     fi
+  else
+    echo_error "SITES must use the shell-safe quoted backtick format"
+    echo_error "Expected a single-quoted, backtick-wrapped site name"
+  fi
 
-    local rule_prefix="${quote}Host(${backtick}"
-    local rule_suffix="${backtick})${quote}"
+  local rule_prefix="${quote}Host(${backtick}"
+  local rule_suffix="${backtick})${quote}"
 
-    if [[ "$sites_rule" == "${rule_prefix}"*"${rule_suffix}" ]]; then
-        inner="${sites_rule#"$rule_prefix"}"
-        inner="${inner%"$rule_suffix"}"
+  if [[ "$sites_rule" == "${rule_prefix}"*"${rule_suffix}" ]]; then
+    inner="${sites_rule#"$rule_prefix"}"
+    inner="${inner%"$rule_suffix"}"
 
-        if [[ -n "$inner" ]]; then
-            echo_info "SITES_RULE format is shell-safe"
-        else
-            echo_error "SITES_RULE contains an empty site name"
-        fi
+    if [[ -n "$inner" ]]; then
+      echo_info "SITES_RULE format is shell-safe"
     else
-        echo_error "SITES_RULE must use the shell-safe quoted Traefik Host() format"
-        echo_error "Expected a single-quoted Host() rule containing the site name"
+      echo_error "SITES_RULE contains an empty site name"
     fi
+  else
+    echo_error "SITES_RULE must use the shell-safe quoted Traefik Host() format"
+    echo_error "Expected a single-quoted Host() rule containing the site name"
+  fi
 
-    return 0
+  return 0
 }
 
 validate_env_sourceability() {
-    local env_file="production.env"
-    local output
+  local env_file="production.env"
+  local output
 
-    echo "Checking Bash sourceability of $env_file..."
+  echo "Checking Bash sourceability of $env_file..."
 
-    if [[ ! -f "$env_file" ]]; then
-        echo_error "$env_file not found; cannot test sourceability"
-        return 1
-    fi
+  if [[ ! -f "$env_file" ]]; then
+    echo_error "$env_file not found; cannot test sourceability"
+    return 1
+  fi
 
-    # Parse first, then source in an isolated Bash process. This catches
-    # syntax problems caused by values such as unquoted backticks while
-    # keeping the parent validation shell untouched.
-    if ! bash -n "$env_file"; then
-        echo_error "$env_file contains Bash syntax errors"
-        return 1
-    fi
+  # Parse first, then source in an isolated Bash process. This catches
+  # syntax problems caused by values such as unquoted backticks while
+  # keeping the parent validation shell untouched.
+  if ! bash -n "$env_file"; then
+    echo_error "$env_file contains Bash syntax errors"
+    return 1
+  fi
 
-    output="$(
-        bash -c '
+  output="$(
+    bash -c '
             set -euo pipefail
             source "$1"
             printf "SITES=%s\nSITES_RULE=%s\nCUSTOM_TAG=%s\n" \
                 "${SITES-}" "${SITES_RULE-}" "${CUSTOM_TAG-}"
         ' bash "$env_file" 2>&1
-    )" || {
-        echo_error "$env_file could not be safely sourced by Bash"
-        echo "$output" | sed 's/^/    /'
-        return 1
-    }
-
-    if [[ -z "$output" ]]; then
-        echo_error "$env_file source test returned no configuration values"
-        return 1
+  )" || {
+    echo_error "$env_file could not be safely sourced by Bash"
+    if [[ -n "$output" ]]; then
+      printf '    %s\n' "${output//$'\n'/$'\n    '}"
     fi
+    return 1
+  }
 
-    echo_info "$env_file is Bash-sourceable"
-    return 0
+  if [[ -z "$output" ]]; then
+    echo_error "$env_file source test returned no configuration values"
+    return 1
+  fi
+
+  echo_info "$env_file is Bash-sourceable"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -329,37 +333,37 @@ validate_env_sourceability() {
 # ---------------------------------------------------------------------------
 
 validate_traefik_configuration() {
-    local hashed_password
-    local traefik_domain
+  local hashed_password
+  local traefik_domain
 
-    hashed_password="$(get_env_value "traefik.env" "HASHED_PASSWORD")"
-    traefik_domain="$(get_env_value "traefik.env" "TRAEFIK_DOMAIN")"
+  hashed_password="$(get_env_value "traefik.env" "HASHED_PASSWORD")"
+  traefik_domain="$(get_env_value "traefik.env" "TRAEFIK_DOMAIN")"
 
-    # Check if password is actually hashed.
-    if [[ -n "$hashed_password" ]]; then
+  # Check if password is actually hashed.
+  if [[ -n "$hashed_password" ]]; then
 
-        if echo "$hashed_password" |
-            grep -Eiq "openssl|changeit|yourpassword|CHANGEME"; then
-            echo_error "HASHED_PASSWORD does not appear to contain a generated hash"
-            echo "  Generate with: openssl passwd -apr1 'yourpassword'"
-        fi
-
-        # Check if username prefix is included.
-        if [[ "$hashed_password" == admin:* ]]; then
-            echo_error "HASHED_PASSWORD should NOT include the 'admin:' prefix"
-            echo_warn "Remove 'admin:' from the hash in traefik.env"
-            echo_warn "The Compose configuration adds the username separately"
-        fi
+    if echo "$hashed_password" |
+      grep -Eiq "openssl|changeit|yourpassword|CHANGEME"; then
+      echo_error "HASHED_PASSWORD does not appear to contain a generated hash"
+      echo "  Generate with: openssl passwd -apr1 'yourpassword'"
     fi
 
-    # Check domain.
-    if [[ -n "$traefik_domain" ]]; then
-        if echo "$traefik_domain" | grep -Eqi "$PLACEHOLDER_DOMAINS"; then
-            echo_error "TRAEFIK_DOMAIN still contains a placeholder domain"
-        else
-            echo_info "TRAEFIK_DOMAIN does not use a placeholder domain"
-        fi
+    # Check if username prefix is included.
+    if [[ "$hashed_password" == admin:* ]]; then
+      echo_error "HASHED_PASSWORD should NOT include the 'admin:' prefix"
+      echo_warn "Remove 'admin:' from the hash in traefik.env"
+      echo_warn "The Compose configuration adds the username separately"
     fi
+  fi
+
+  # Check domain.
+  if [[ -n "$traefik_domain" ]]; then
+    if echo "$traefik_domain" | grep -Eqi "$PLACEHOLDER_DOMAINS"; then
+      echo_error "TRAEFIK_DOMAIN still contains a placeholder domain"
+    else
+      echo_info "TRAEFIK_DOMAIN does not use a placeholder domain"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -368,9 +372,9 @@ validate_traefik_configuration() {
 
 main() {
 
-    # Help
-    if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
-        cat << EOF
+  # Help
+  if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
+    cat <<EOF
 Usage: $0
 
 Validates ERPNext deployment environment configuration.
@@ -406,139 +410,139 @@ Examples:
   $0
   $0 --help
 EOF
-        exit 0
+    exit 0
+  fi
+
+  echo "🔍 Validating ERPNext Deployment Environment"
+  echo "============================================"
+  echo ""
+
+  # -----------------------------------------------------------------------
+  # production.env
+  # -----------------------------------------------------------------------
+
+  if validate_env_file \
+    "production.env" \
+    "DB_PASSWORD" \
+    "DB_HOST" \
+    "LETSENCRYPT_EMAIL" \
+    "SITES" \
+    "CUSTOM_IMAGE" \
+    "CUSTOM_TAG"; then
+
+    local letsencrypt_email
+    local db_password
+
+    letsencrypt_email="$(get_env_value "production.env" "LETSENCRYPT_EMAIL")"
+    db_password="$(get_env_value "production.env" "DB_PASSWORD")"
+
+    if [[ -n "$letsencrypt_email" ]]; then
+      validate_email "$letsencrypt_email" "LETSENCRYPT_EMAIL" || true
     fi
 
-    echo "🔍 Validating ERPNext Deployment Environment"
-    echo "============================================"
-    echo ""
+    validate_sites || true
+    validate_env_sourceability || true
 
-    # -----------------------------------------------------------------------
-    # production.env
-    # -----------------------------------------------------------------------
-
-    if validate_env_file \
-        "production.env" \
-        "DB_PASSWORD" \
-        "DB_HOST" \
-        "LETSENCRYPT_EMAIL" \
-        "SITES" \
-        "CUSTOM_IMAGE" \
-        "CUSTOM_TAG"; then
-
-        local letsencrypt_email
-        local db_password
-
-        letsencrypt_email="$(get_env_value "production.env" "LETSENCRYPT_EMAIL")"
-        db_password="$(get_env_value "production.env" "DB_PASSWORD")"
-
-        if [[ -n "$letsencrypt_email" ]]; then
-            validate_email "$letsencrypt_email" "LETSENCRYPT_EMAIL" || true
-        fi
-
-        validate_sites || true
-        validate_env_sourceability || true
-
-        if [[ -n "$db_password" ]]; then
-            validate_password_strength "$db_password" || true
-        fi
-
-        validate_image_configuration
+    if [[ -n "$db_password" ]]; then
+      validate_password_strength "$db_password" || true
     fi
 
-    echo ""
+    validate_image_configuration
+  fi
 
-    # -----------------------------------------------------------------------
-    # traefik.env
-    # -----------------------------------------------------------------------
+  echo ""
 
-    if validate_env_file \
-        "traefik.env" \
-        "TRAEFIK_DOMAIN" \
-        "EMAIL" \
-        "HASHED_PASSWORD"; then
+  # -----------------------------------------------------------------------
+  # traefik.env
+  # -----------------------------------------------------------------------
 
-        local traefik_email
+  if validate_env_file \
+    "traefik.env" \
+    "TRAEFIK_DOMAIN" \
+    "EMAIL" \
+    "HASHED_PASSWORD"; then
 
-        traefik_email="$(get_env_value "traefik.env" "EMAIL")"
+    local traefik_email
 
-        if [[ -n "$traefik_email" ]]; then
-            validate_email "$traefik_email" "traefik.env EMAIL" || true
-        fi
+    traefik_email="$(get_env_value "traefik.env" "EMAIL")"
 
-        validate_traefik_configuration
+    if [[ -n "$traefik_email" ]]; then
+      validate_email "$traefik_email" "traefik.env EMAIL" || true
     fi
 
-    echo ""
+    validate_traefik_configuration
+  fi
 
-    # -----------------------------------------------------------------------
-    # mariadb.env
-    # -----------------------------------------------------------------------
+  echo ""
 
-    validate_env_file "mariadb.env" "DB_PASSWORD" || true
+  # -----------------------------------------------------------------------
+  # mariadb.env
+  # -----------------------------------------------------------------------
 
-    echo ""
+  validate_env_file "mariadb.env" "DB_PASSWORD" || true
 
-    # -----------------------------------------------------------------------
-    # Cross-file validation
-    # -----------------------------------------------------------------------
+  echo ""
 
-    echo "Cross-checking configurations..."
+  # -----------------------------------------------------------------------
+  # Cross-file validation
+  # -----------------------------------------------------------------------
 
-    if [[ -f "production.env" && -f "mariadb.env" ]]; then
+  echo "Cross-checking configurations..."
 
-        local prod_pass
-        local maria_pass
+  if [[ -f "production.env" && -f "mariadb.env" ]]; then
 
-        prod_pass="$(get_env_value "production.env" "DB_PASSWORD")"
-        maria_pass="$(get_env_value "mariadb.env" "DB_PASSWORD")"
+    local prod_pass
+    local maria_pass
 
-        if [[ -n "$prod_pass" && -n "$maria_pass" ]]; then
-            if [[ "$prod_pass" == "$maria_pass" ]]; then
-                echo_info "Database passwords match"
-            else
-                echo_error "Database passwords DO NOT match between production.env and mariadb.env"
-            fi
-        fi
+    prod_pass="$(get_env_value "production.env" "DB_PASSWORD")"
+    maria_pass="$(get_env_value "mariadb.env" "DB_PASSWORD")"
+
+    if [[ -n "$prod_pass" && -n "$maria_pass" ]]; then
+      if [[ "$prod_pass" == "$maria_pass" ]]; then
+        echo_info "Database passwords match"
+      else
+        echo_error "Database passwords DO NOT match between production.env and mariadb.env"
+      fi
     fi
+  fi
 
+  echo ""
+
+  # -----------------------------------------------------------------------
+  # Final summary
+  # -----------------------------------------------------------------------
+
+  echo "============================================"
+  echo "Validation Summary"
+  echo "============================================"
+  echo ""
+
+  if ((errors > 0)); then
+
+    echo -e "${RED}❌ Validation Failed${NC}"
+    echo "   Errors: $errors"
+    echo "   Warnings: $warnings"
     echo ""
+    echo "Please fix the errors above before deploying."
+    exit 1
 
-    # -----------------------------------------------------------------------
-    # Final summary
-    # -----------------------------------------------------------------------
+  elif ((warnings > 0)); then
 
-    echo "============================================"
-    echo "Validation Summary"
-    echo "============================================"
+    echo -e "${YELLOW}⚠️  Validation Passed with Warnings${NC}"
+    echo "   Warnings: $warnings"
     echo ""
+    echo "Review the warnings before proceeding with deployment."
+    exit 0
 
-    if (( errors > 0 )); then
+  else
 
-        echo -e "${RED}❌ Validation Failed${NC}"
-        echo "   Errors: $errors"
-        echo "   Warnings: $warnings"
-        echo ""
-        echo "Please fix the errors above before deploying."
-        exit 1
-
-    elif (( warnings > 0 )); then
-
-        echo -e "${YELLOW}⚠️  Validation Passed with Warnings${NC}"
-        echo "   Warnings: $warnings"
-        echo ""
-        echo "Review the warnings before proceeding with deployment."
-        exit 0
-
-    else
-
-        echo -e "${GREEN}✅ Validation Passed${NC}"
-        echo "   No errors or warnings found."
-        echo ""
-        echo "You can now regenerate and review the deployment configuration:"
-        echo "  ./scripts/deploy.sh --regenerate"
-        exit 0
-    fi
+    echo -e "${GREEN}✅ Validation Passed${NC}"
+    echo "   No errors or warnings found."
+    echo ""
+    echo "You can now regenerate and review the deployment configuration:"
+    echo "  ./scripts/deploy.sh --regenerate"
+    exit 0
+  fi
 }
 
 main "$@"
