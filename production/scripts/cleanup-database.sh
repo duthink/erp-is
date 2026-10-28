@@ -37,19 +37,19 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+  echo -e "${GREEN}[INFO]${NC} $1"
 }
 
 echo_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+  echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
 echo_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+  echo -e "${RED}[ERROR]${NC} $1"
 }
 
 show_help() {
-    cat <<EOF
+  cat <<EOF
 ERPNext Database Cleanup
 
 STATUS:
@@ -85,22 +85,22 @@ EOF
 }
 
 case "${1:-}" in
-    -h|--help)
-        show_help
-        exit 0
-        ;;
-    "")
-        echo_warn "Database cleanup is retired."
-        echo_info "No database changes were made."
-        echo ""
-        show_help
-        exit 1
-        ;;
-    *)
-        echo_error "Database cleanup is retired and accepts no cleanup options."
-        echo_info "No database changes were made."
-        echo ""
-        show_help
-        exit 1
-        ;;
+-h | --help)
+  show_help
+  exit 0
+  ;;
+"")
+  echo_warn "Database cleanup is retired."
+  echo_info "No database changes were made."
+  echo ""
+  show_help
+  exit 1
+  ;;
+*)
+  echo_error "Database cleanup is retired and accepts no cleanup options."
+  echo_info "No database changes were made."
+  echo ""
+  show_help
+  exit 1
+  ;;
 esac
