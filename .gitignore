@@ -45,3 +45,8 @@ production/docs/pre-update-safety-checklist.md
 # VitePress
 **/.vitepress/dist
 **/.vitepress/cache
+
+# Private operational notes (this fork is public)
+*_private.md
+production/docs/
+production/backup/README.md
