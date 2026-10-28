@@ -141,12 +141,13 @@ def s3_service(python_path: str, compose: Compose):
         "minio",
         "-d",
         "-e",
-        f"MINIO_ACCESS_KEY={access_key}",
+        f"MINIO_ROOT_USER={access_key}",
         "-e",
-        f"MINIO_SECRET_KEY={secret_key}",
+        f"MINIO_ROOT_PASSWORD={secret_key}",
         "--network",
         f"{compose.project_name}_default",
-        "minio/minio",
+        # minio/minio is no longer published on Docker Hub
+        "cgr.dev/chainguard/minio:latest",
         "server",
         "/data",
     )
